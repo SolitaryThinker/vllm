@@ -102,8 +102,11 @@ class ModelRunner:
         self.sliding_window = model_config.get_sliding_window()
         self.block_size = cache_config.block_size
         self.max_seq_len_to_capture = self.model_config.max_seq_len_to_capture
+        num_graph_runners = self.parallel_config.pipeline_parallel_size if \
+                            self.parallel_config.pipeline_parallel_size \
+                            is not None else 1
         self.graph_runners: List[Dict[int, CUDAGraphRunner]] = [
-            {} for _ in range(self.parallel_config.pipeline_parallel_size)
+            {} for _ in range(num_graph_runners)
         ]
         self.graph_memory_pool: Optional[Tuple[
             int, int]] = None  # Set during graph capture.
