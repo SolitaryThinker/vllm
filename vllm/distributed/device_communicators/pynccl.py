@@ -20,7 +20,6 @@ class PyNcclCommunicator:
     def __init__(
         self,
         group: Optional[ProcessGroup] = None,
-        src_rank: int = 0,
         device: Optional[Union[int, str, torch.device]] = None,
         library_path: Optional[str] = None,
     ):
