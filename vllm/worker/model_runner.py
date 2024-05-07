@@ -607,7 +607,7 @@ class ModelRunner:
         seq_group_metadata_list: List[SequenceGroupMetadata],
     ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
                Set[LoRARequest], LoRAMapping, torch.Tensor]:
-        if is_tensor_model_parallel_first_rank():
+        if self.parallel_config.world_size == 1 or is_tensor_model_parallel_first_rank():
             # Prepare input tensors.
             (
                 input_tokens,
