@@ -546,7 +546,7 @@ class AsyncLLMEngine:
 
     async def add_request(
         self,
-        request_id: str,
+        request_id: str, virtual_engine,
         prompt: Optional[str],
         params: Union[SamplingParams, PoolingParams],
         prompt_token_ids: Optional[List[int]] = None,
