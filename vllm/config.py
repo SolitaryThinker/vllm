@@ -25,6 +25,17 @@ logger = init_logger(__name__)
 _GB = 1 << 30
 _EMBEDDING_MODEL_MAX_NUM_BATCHED_TOKENS = 32768
 
+_PP_SUPPORTED_MODELS = [
+    "AquilaModel",
+    "AquilaForCausalLM",
+    "InternLMForCausalLM",
+    "LlamaForCausalLM",
+    "LLaMAForCausalLM",
+    "MistralForCausalLM",
+    "Phi3ForCausalLM",
+    "GPT2LMHeadModel",
+]
+
 
 class ModelConfig:
     """Configuration for the model.
@@ -233,6 +244,13 @@ class ModelConfig:
 
         total_num_hidden_layers = self.hf_text_config.num_hidden_layers
         pipeline_parallel_size = parallel_config.pipeline_parallel_size
+        architectures = getattr(self.hf_config, "architectures", [])
+        if not all(arch in _PP_SUPPORTED_MODELS for arch in architectures):
+            raise NotImplementedError(
+                "Pipeline parallelism is only supported for the following "
+                f" architectures: {_PP_SUPPORTED_MODELS}."
+            )
+
         if total_num_hidden_layers % pipeline_parallel_size != 0:
             raise ValueError(
                 f"Total number of hidden layers ({total_num_hidden_layers}) "
