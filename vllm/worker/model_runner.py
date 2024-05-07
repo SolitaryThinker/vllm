@@ -712,7 +712,8 @@ class ModelRunner:
 
         # Compute the logits in the last pipeline stage.
         if is_pipeline_model_parallel_last_rank():
-            logits = self.model.compute_logits(hidden_states, sampling_metadata)
+            logits = self.model.compute_logits(hidden_states,
+                                               sampling_metadata)
         else:
             return None
 
