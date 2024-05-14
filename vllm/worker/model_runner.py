@@ -14,6 +14,7 @@ from vllm.distributed.communication_op import graph_capture, graph_mode
 from vllm.distributed import (broadcast_tensor_dict,
                               get_tensor_model_parallel_group,
                               get_tensor_model_parallel_src_rank,
+                              get_tp_src_rank_and_group,
                               is_pipeline_model_parallel_last_rank,
                               is_tensor_model_parallel_first_rank)
 from vllm.logger import init_logger
@@ -613,7 +614,8 @@ class ModelRunner:
         seq_group_metadata_list: List[SequenceGroupMetadata],
     ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
                Set[LoRARequest], LoRAMapping, torch.Tensor]:
-        if self.parallel_config.world_size == 1 or is_tensor_model_parallel_first_rank():
+        src_rank, tp_group = get_tp_src_rank_and_group()
+        if (not tp_group or is_tensor_model_parallel_first_rank()):
             # Prepare input tensors.
             (
                 input_tokens,
@@ -651,9 +653,7 @@ class ModelRunner:
             broadcast_tensor_dict(metadata_dict, src=get_tensor_model_parallel_src_rank(),
                                   group=get_tensor_model_parallel_group())
         else:
-            metadata_dict = broadcast_tensor_dict(
-                src=get_tensor_model_parallel_src_rank(),
-                group=get_tensor_model_parallel_group())
+            metadata_dict = broadcast_tensor_dict(src=src_rank, group=tp_group)
             input_tokens = metadata_dict.pop("input_tokens")
             input_positions = metadata_dict.pop("input_positions")
             selected_token_indices = metadata_dict.pop(
