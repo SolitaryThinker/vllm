@@ -38,6 +38,8 @@ _DEVICE_WORLD_GROUP = None
 # group with `gloo` backend, to allow direct coordination between
 # processes through the CPU.
 _CPU_WORLD_GROUP = None
+# CPU tensor model parallel group that the current rank belongs to.
+_CPU_TENSOR_MODEL_PARALLEL_GROUP = None
 
 # In summary, after calling `init_distributed_environment`, we will
 # always have two groups: one for device-specific (and is the default)
@@ -194,6 +196,16 @@ def initialize_model_parallel(
             device=_LOCAL_RANK,
         )
 
+    global _CPU_TENSOR_MODEL_PARALLEL_GROUP
+    assert _CPU_TENSOR_MODEL_PARALLEL_GROUP is None, (
+        "CPU tensor model parallel group is already initialized")
+    for i in range(num_tensor_model_parallel_groups):
+        ranks = range(i * tensor_model_parallel_size,
+                      (i + 1) * tensor_model_parallel_size)
+        group = torch.distributed.new_group(ranks, backend="gloo")
+        if rank in ranks:
+            _CPU_TENSOR_MODEL_PARALLEL_GROUP = group
+
     # Build the pipeline model-parallel groups.
     global _PP_DEVICE_GROUP
     global _PP_GLOBAL_RANKS
@@ -244,6 +256,12 @@ def get_cpu_world_group():
     """Get the CPU world group."""
     assert _CPU_WORLD_GROUP is not None, ("CPU world group is not initialized")
     return _CPU_WORLD_GROUP
+
+
+def get_cpu_tensor_model_parallel_group():
+    """Get the CPU world group."""
+    assert _CPU_TENSOR_MODEL_PARALLEL_GROUP is not None, ("CPU tensor model parallel group is not initialized")
+    return _CPU_TENSOR_MODEL_PARALLEL_GROUP
 
 
 def get_tensor_model_parallel_group():
