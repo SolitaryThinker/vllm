@@ -15,6 +15,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
 from vllm.distributed.communication_op import graph_capture, graph_mode
 from vllm.distributed import (broadcast_tensor_dict,
                               get_tensor_model_parallel_group,
+                              get_tensor_model_parallel_cpu_group,
                               get_tensor_model_parallel_src_rank,
                               get_tp_src_rank_and_group,
                               is_pipeline_model_parallel_last_rank,
@@ -626,6 +627,7 @@ class ModelRunner:
     ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
                Set[LoRARequest], LoRAMapping, torch.Tensor]:
         src_rank, tp_group = get_tp_src_rank_and_group()
+        tp_cpu_group = get_tensor_model_parallel_cpu_group()
         if (not tp_group or is_tensor_model_parallel_first_rank()):
             prefill_reqs = []
             decode_reqs = []
@@ -725,7 +727,7 @@ class ModelRunner:
             else:
                 assert decode_attn_metadata is not None
                 metadata_dict.update(decode_attn_metadata.asdict_zerocopy())
-            broadcast_tensor_dict(metadata_dict, src=src_rank, group=tp_group)
+            broadcast_tensor_dict(metadata_dict, src=src_rank, group=tp_group, metadata_group=tp_cpu_group)
 
             # Broadcast decode attn metadata for mixed batch type.
             # The additional broadcast costs 300us overhead on 4 A10 GPUs.
@@ -735,9 +737,9 @@ class ModelRunner:
                 metadata_dict = decode_attn_metadata.asdict_zerocopy()
                 broadcast_tensor_dict(metadata_dict,
                                       src=src_rank,
-                                      group=tp_group)
+                                      group=tp_group, metadata_group=tp_cpu_group)
         else:
-            metadata_dict = broadcast_tensor_dict(src=src_rank, group=tp_group)
+            metadata_dict = broadcast_tensor_dict(src=src_rank, group=tp_group, metadata_group=tp_cpu_group)
             input_tokens = metadata_dict.pop("input_tokens")
             input_positions = metadata_dict.pop("input_positions")
             slot_mapping = metadata_dict.pop("slot_mapping")
@@ -771,7 +773,7 @@ class ModelRunner:
             # separately.
             if batch_type == BatchType.MIXED:
                 metadata_dict = broadcast_tensor_dict(src=src_rank,
-                                                      group=tp_group)
+                                                      group=tp_group, metadata_group=tp_cpu_group)
                 decode_attn_metadata = self.attn_backend.make_metadata(
                     **metadata_dict)
 
