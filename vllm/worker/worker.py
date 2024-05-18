@@ -13,6 +13,7 @@ from vllm.distributed import (broadcast_tensor_dict,
                               ensure_model_parallel_initialized,
                               set_custom_all_reduce,
                               get_tensor_model_parallel_group,
+                              get_tensor_model_parallel_cpu_group,
                               get_tensor_model_parallel_src_rank,
                               get_tp_src_rank_and_group,
                               init_distributed_environment,
@@ -250,6 +251,7 @@ class Worker(WorkerBase):
         # if (self.parallel_config.tensor_parallel_size == 1
                 # or is_tensor_model_parallel_first_rank()):
         src_rank, tp_group = get_tp_src_rank_and_group()
+        tp_cpu_group = get_tensor_model_parallel_cpu_group()
         if (not tp_group or is_tensor_model_parallel_first_rank()):
             assert seq_group_metadata_list is not None
             assert execute_model_req is not None
@@ -278,9 +280,9 @@ class Worker(WorkerBase):
                 "blocks_to_swap_out": blocks_to_swap_out,
                 "blocks_to_copy": blocks_to_copy,
             }
-            broadcast_tensor_dict(data, src=src_rank, group=tp_group)
+            broadcast_tensor_dict(data, src=src_rank, group=tp_group, metadata_group=tp_cpu_group)
         else:
-            data = broadcast_tensor_dict(src=src_rank, group=tp_group)
+            data = broadcast_tensor_dict(src=src_rank, group=tp_group, metadata_group=tp_cpu_group)
             num_seq_groups = data["num_seq_groups"]
             virtual_engine = data["virtual_engine"]
             blocks_to_swap_in = data["blocks_to_swap_in"]
