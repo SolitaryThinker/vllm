@@ -678,7 +678,7 @@ class ModelRunner:
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
         kv_caches: List[torch.Tensor],
-        virtual_engine: int = 0,
+        virtual_engine: int,
     ) -> Optional[SamplerOutput]:
         (input_tokens, input_positions, attn_metadata, sampling_metadata,
          lora_requests, lora_mapping, multi_modal_input
@@ -701,6 +701,7 @@ class ModelRunner:
             "positions": input_positions,
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
+            "virtual_engine": virtual_engine,
         }
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
@@ -789,7 +790,7 @@ class ModelRunner:
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
         kv_caches = [None] * num_layers
-        self.execute_model(seqs, kv_caches)
+        self.execute_model(seqs, kv_caches, 0)
         torch.cuda.synchronize()
         return
 
@@ -898,6 +899,7 @@ class ModelRunner:
                         attn_metadata,
                         memory_pool=self.graph_memory_pool,
                         stream=graph_capture_context.stream,
+                        virtual_engine=virtual_engine,
                     )
                     self.graph_memory_pool = graph_runner.graph.pool()
                     self.graph_runners[virtual_engine][batch_size] = graph_runner
@@ -934,6 +936,7 @@ class CUDAGraphRunner:
         attn_metadata: AttentionMetadata,
         memory_pool: Optional[Tuple[int, int]],
         stream: torch.cuda.Stream,
+        virtual_engine: int,
         **kwargs,
     ) -> None:
         assert self._graph is None
@@ -945,6 +948,7 @@ class CUDAGraphRunner:
             positions,
             kv_caches,
             attn_metadata,
+            virtual_engine,
             **kwargs,
         )
         torch.cuda.synchronize()
@@ -957,6 +961,7 @@ class CUDAGraphRunner:
                 positions,
                 kv_caches,
                 attn_metadata,
+                virtual_engine,
                 **kwargs,
             )
         torch.cuda.synchronize()

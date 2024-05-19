@@ -315,17 +315,18 @@ def broadcast_tensor_dict(
     return tensor_dict
 
 
-def send_next_rank(tensors: List[torch.Tensor]) -> None:
+def send_next_rank(tensors: List[torch.Tensor], virtual_engine: int) -> None:
     """Send the tensors to the next pipeline model parallel rank."""
     combined_tensor = torch.cat(tensors, dim=0)
     torch.cat(tensors, dim=0)
     torch.distributed.send(combined_tensor,
                            get_pipeline_model_parallel_next_rank(),
-                           get_pipeline_model_parallel_group())
+                           get_pipeline_model_parallel_group(),
+                           virtual_engine)
 
 
 def recv_prev_rank(num_tensors: int, sizes: torch.Size, dtype: torch.dtype,
-                   device: torch.device) -> List[torch.Tensor]:
+                   device: torch.device, virtual_engine: int) -> List[torch.Tensor]:
     sizes = list(sizes)
     """Receive tensors from the previous pipeline model parallel rank."""
     combined_tensor = torch.empty([sizes[0] * num_tensors] + sizes[1:],
@@ -333,5 +334,6 @@ def recv_prev_rank(num_tensors: int, sizes: torch.Size, dtype: torch.dtype,
                                   device=device)
     torch.distributed.recv(combined_tensor,
                            get_pipeline_model_parallel_prev_rank(),
-                           get_pipeline_model_parallel_group())
+                           get_pipeline_model_parallel_group(),
+                           virtual_engine)
     return torch.chunk(combined_tensor, num_tensors, dim=0)
