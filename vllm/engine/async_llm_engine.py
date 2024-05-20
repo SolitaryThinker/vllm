@@ -504,7 +504,6 @@ class AsyncLLMEngine:
         else:
             pipeline_parallel_size = \
                 self.engine.parallel_config.pipeline_parallel_size
-            pipeline_parallel_size = 1
         has_requests_in_progress = [False] * pipeline_parallel_size
         while True:
             if not any(has_requests_in_progress):

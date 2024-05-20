@@ -328,12 +328,20 @@ def broadcast_tensor_dict(
 
 def send_next_rank(tensors: List[torch.Tensor], virtual_engine: int) -> None:
     """Send the tensors to the next pipeline model parallel rank."""
+    pynccl_comm = get_pp_pynccl_communicator()
+    
     combined_tensor = torch.cat(tensors, dim=0)
     torch.cat(tensors, dim=0)
-    torch.distributed.send(combined_tensor,
-                           get_pipeline_model_parallel_next_rank(),
-                           get_pipeline_model_parallel_group(),
-                           virtual_engine)
+
+    if (pynccl_comm is not None and not pynccl_comm.disabled):
+        #print('PP using pynccl~~~~~~~~~', pynccl_comm)
+        dst = torch.distributed.get_group_rank(get_pipeline_model_parallel_group(), get_pipeline_model_parallel_next_rank())
+        pynccl_comm.send(combined_tensor, dst)
+    else:
+        torch.distributed.send(combined_tensor,
+                            get_pipeline_model_parallel_next_rank(),
+                            get_pipeline_model_parallel_group(),
+                            virtual_engine)
 
 
 def pynccl_send_next_rank(tensors: List[torch.Tensor], virtual_engine: int) -> None:
@@ -350,15 +358,23 @@ def pynccl_send_next_rank(tensors: List[torch.Tensor], virtual_engine: int) -> N
 
 def recv_prev_rank(num_tensors: int, sizes: torch.Size, dtype: torch.dtype,
                    device: torch.device, virtual_engine: int) -> List[torch.Tensor]:
+    pynccl_comm = get_pp_pynccl_communicator()
+
     sizes = list(sizes)
     """Receive tensors from the previous pipeline model parallel rank."""
     combined_tensor = torch.empty([sizes[0] * num_tensors] + sizes[1:],
                                   dtype=dtype,
                                   device=device)
-    torch.distributed.recv(combined_tensor,
-                           get_pipeline_model_parallel_prev_rank(),
-                           get_pipeline_model_parallel_group(),
-                           virtual_engine)
+
+    if (pynccl_comm is not None and not pynccl_comm.disabled):
+        #print('PP using pynccl~~~~~~~~~', pynccl_comm)
+        src = torch.distributed.get_group_rank(get_pipeline_model_parallel_group(), get_pipeline_model_parallel_prev_rank())
+        pynccl_comm.recv(combined_tensor, src)
+    else:
+        torch.distributed.recv(combined_tensor,
+                            get_pipeline_model_parallel_prev_rank(),
+                            get_pipeline_model_parallel_group(),
+                            virtual_engine)
     return torch.chunk(combined_tensor, num_tensors, dim=0)
 
 
@@ -374,6 +390,5 @@ def pynccl_recv_prev_rank(num_tensors: int, sizes: torch.Size, dtype: torch.dtyp
 
     pynccl_comm = get_pp_pynccl_communicator()
     if (pynccl_comm is not None and not pynccl_comm.disabled):
-        print('~~~~~~~~~using pynccl~~~~~~~~~')
         pynccl_comm.recv(combined_tensor, src)
     return torch.chunk(combined_tensor, num_tensors, dim=0)

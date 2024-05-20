@@ -313,11 +313,9 @@ class LlamaModel(nn.Module):
                 sizes = list(inputs_embeds.size())
             else:
                 sizes = list(input_ids.size()) + [self.config.hidden_size]
-            print('before recv_prev rank')
-            hidden_states, residual = pynccl_recv_prev_rank(
+            hidden_states, residual = recv_prev_rank(
                 2, torch.Size(sizes), self.embed_tokens.weight.dtype,
                 self.embed_tokens.weight.device, virtual_engine)
-            print('after recv_prev rank')
 
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
@@ -332,9 +330,7 @@ class LlamaModel(nn.Module):
         if is_pipeline_model_parallel_last_rank():
             hidden_states, _ = self.norm(hidden_states, residual)
         else:
-            print('before send_next rank')
-            pynccl_send_next_rank([hidden_states, residual], virtual_engine)
-            print('after send_next rank')
+            send_next_rank([hidden_states, residual], virtual_engine)
         return hidden_states
 
 

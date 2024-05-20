@@ -956,7 +956,6 @@ class CUDAGraphRunner:
         # Capture the graph.
         self._graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self._graph, pool=memory_pool, stream=stream):
-            print('=========capturing graph')
             hidden_states = self.model(
                 input_ids,
                 positions,
