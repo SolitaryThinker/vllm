@@ -915,6 +915,7 @@ class ModelRunner:
                             attn_metadata,
                             memory_pool=self.graph_memory_pool,
                             stream=graph_capture_context.stream,
+                            virtual_engine=virtual_engine,
                         )
                     self.graph_memory_pool = graph_runner.graph.pool()
                     self.graph_runners[virtual_engine][
@@ -952,6 +953,7 @@ class CUDAGraphRunner:
         attn_metadata: AttentionMetadata,
         memory_pool: Optional[Tuple[int, int]],
         stream: torch.cuda.Stream,
+        virtual_engine: int,
         **kwargs,
     ) -> None:
         assert self._graph is None
@@ -963,6 +965,7 @@ class CUDAGraphRunner:
             positions,
             kv_caches,
             attn_metadata,
+            virtual_engine,
             **kwargs,
         )
         torch.cuda.synchronize()
@@ -975,6 +978,7 @@ class CUDAGraphRunner:
                 positions,
                 kv_caches,
                 attn_metadata,
+                virtual_engine,
                 **kwargs,
             )
         torch.cuda.synchronize()
