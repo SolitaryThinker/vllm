@@ -13,6 +13,7 @@ from vllm.logger import init_logger
 from vllm.sequence import ExecuteModelRequest, SamplerOutput
 from vllm.utils import (get_distributed_init_method, get_ip, get_open_port,
                         get_vllm_instance_id, make_async)
+import nvtx
 
 if ray is not None:
     from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -306,6 +307,7 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
         super().__init__(*args, **kwargs)
         self.driver_executor = make_async(self.driver_worker.execute_method)
 
+    @nvtx.annotate("run_workers_async")
     async def _run_workers_async(
         self,
         method: str,
@@ -321,29 +323,60 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
             driver_kwargs = kwargs
 
         # Run the ray workers asynchronously.
-
-        for pp_rank in range(self.parallel_config.pipeline_parallel_size):
-            coros = []
-            # Locks are necessary for correctness in the TP + PP case.
-            async with self.pp_locks[pp_rank]:
+        ve = driver_args[-1].virtual_engine
+        nvtx.push_range(message=f"_run_workers_async {ve}", color="red", domain=f've_{ve}')
+        output_worker = None
+        async with self.pp_locks[0]:
+            for pp_rank in range(self.parallel_config.pipeline_parallel_size-1):
+                coros = []
+                # Locks are necessary for correctness in the TP + PP case.
                 for tp_rank in range(
                         self.parallel_config.tensor_parallel_size):
                     rank = (pp_rank * self.parallel_config.tensor_parallel_size
                             ) + tp_rank
                     if rank == 0:
+                        nvtx.mark(f'run_workers_async_{ve} worker_driver',color='green',  domain=f've_{ve}')
                         coros.append(
                             self.driver_executor(method, *driver_args,
-                                                 **driver_kwargs))
+                                                    **driver_kwargs))
                     else:
                         worker = self.workers[rank - 1]
                         if tp_rank == 0:
-                            coros.append(
-                                worker.execute_method.remote(
-                                    method, *driver_args, **driver_kwargs))
+                            nvtx.mark(f'run_workers_async_{ve} worker_{rank}',color='green',  domain=f've_{ve}')
+                            if pp_rank == self.parallel_config.pipeline_parallel_size - 1:
+                                assert False
+                                assert output_worker is None
+                                output_worker = worker.execute_method.remote(
+                                    method, *driver_args, **driver_kwargs)
+                                # coros.append(
+                                #     worker.execute_method.remote(
+                                #         method, *driver_args, **driver_kwargs))
+                            else:
+                                coros.append(
+                                    worker.execute_method.remote(
+                                        method, *driver_args, **driver_kwargs))
+                            
                         else:
+                            nvtx.mark(f'run_workers_async_{ve} worker_{rank}', color='green', domain=f've_{ve}')
                             coros.append(
                                 worker.execute_method.remote(
                                     method, *args, **kwargs))
-                all_outputs = await asyncio.gather(*coros)
-
+            nvtx.mark(f'lstart first gather_{ve}_{pp_rank}', color='green', domain=f've_{ve}')
+            #print('begin first gather', driver_args[-1].virtual_engine)
+            all_outputs = await asyncio.gather(*coros)
+            #print('end first gather', driver_args[-1].virtual_engine)
+            nvtx.mark(f'end first gather_{ve}_{pp_rank}', color='green', domain=f've_{ve}')
+        async with self.pp_locks[1]:
+            #print('begin last worker', driver_args[-1].virtual_engine)
+            assert output_worker is None
+            worker = self.workers[-1]
+            output_worker = worker.execute_method.remote(
+                method, *driver_args, **driver_kwargs)
+            #print('begin second gather', driver_args[-1].virtual_engine)
+            assert output_worker is not None
+            nvtx.mark(f'start second gather_{ve}_{pp_rank}', color='green', domain=f've_{ve}')
+            all_outputs = await asyncio.gather(output_worker) if output_worker else all_outputs
+            #print('end second gather', driver_args[-1].virtual_engine)
+            nvtx.mark(f'end second gather_{ve}_{pp_rank}', color='green', domain=f've_{ve}')
+            nvtx.pop_range(domain=f've_{ve}')
         return all_outputs

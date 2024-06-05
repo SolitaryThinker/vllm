@@ -21,6 +21,7 @@ from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
 from vllm.worker.model_runner import ModelRunner
 from vllm.worker.worker_base import WorkerBase
+import nvtx
 
 
 class Worker(WorkerBase):
@@ -250,6 +251,7 @@ class Worker(WorkerBase):
         else:
             virtual_engine = execute_model_req.virtual_engine
 
+        nvtx.push_range(message=f"execute_model {virtual_engine}", color="blue", domain=f've_{virtual_engine}')
         src_rank, tp_group, cpu_tp_group = get_tp_src_rank_and_group()
         if self.is_driver_worker:
             assert seq_group_metadata_list is not None
@@ -302,6 +304,7 @@ class Worker(WorkerBase):
         output = self.model_runner.execute_model(
             seq_group_metadata_list, self.gpu_cache[virtual_engine],
             virtual_engine)
+        nvtx.pop_range(domain=f've_{virtual_engine}')
 
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.

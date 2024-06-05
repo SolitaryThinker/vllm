@@ -10,6 +10,7 @@ from torch.distributed import ProcessGroup
 # yapf: disable
 from .parallel_state import (get_cpu_world_group,
                              get_pipeline_model_parallel_group,
+                             get_pipeline_model_parallel_ve_group,
                              get_pipeline_model_parallel_next_rank,
                              get_pipeline_model_parallel_prev_rank,
                              get_pp_pynccl_communicator,
@@ -17,6 +18,7 @@ from .parallel_state import (get_cpu_world_group,
                              get_tensor_model_parallel_world_size,
                              get_tp_ca_communicator,
                              get_tp_pynccl_communicator)
+import nvtx
 
 # yapf: enable
 
@@ -76,7 +78,7 @@ def graph_capture():
         with maybe_tp_pynccl_context, maybe_pp_pynccl_context:
             yield graph_capture_context
 
-
+@nvtx.annotate("tensor_model_parallel_all_reduce")
 def tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
     """All-reduce the input tensor across model parallel group.
 
@@ -107,6 +109,7 @@ def tensor_model_parallel_all_reduce(input_: torch.Tensor) -> torch.Tensor:
     return input_
 
 
+@nvtx.annotate("tensor_model_parallel_all_gather")
 def tensor_model_parallel_all_gather(input_: torch.Tensor,
                                      dim: int = -1) -> torch.Tensor:
     """All-gather the input tensor across model parallel group."""
@@ -135,6 +138,7 @@ def tensor_model_parallel_all_gather(input_: torch.Tensor,
     return output_tensor
 
 
+@nvtx.annotate("tensor_model_parallel_gather")
 def tensor_model_parallel_gather(input_: torch.Tensor,
                                  dst: int = 0,
                                  dim: int = -1) -> torch.Tensor:
@@ -168,7 +172,7 @@ def tensor_model_parallel_gather(input_: torch.Tensor,
         output_tensor = None
     return output_tensor
 
-
+@nvtx.annotate('broadcast')
 def broadcast(input_: torch.Tensor,
               src: int = 0,
               group: Optional[ProcessGroup] = None):
@@ -324,7 +328,8 @@ def broadcast_tensor_dict(
     return tensor_dict
 
 
-def send_next_rank(tensors: List[torch.Tensor]) -> None:
+@nvtx.annotate("send_next_rank")
+def send_next_rank(tensors: List[torch.Tensor], virtual_engine: int) -> None:
     """Send the tensors to the next pipeline model parallel rank."""
     combined_tensor = torch.cat(tensors, dim=0)
     torch.cat(tensors, dim=0)
@@ -337,8 +342,9 @@ def send_next_rank(tensors: List[torch.Tensor]) -> None:
                                get_pipeline_model_parallel_group())
 
 
+@nvtx.annotate("recv_prev_rank")
 def recv_prev_rank(num_tensors: int, sizes: torch.Size, dtype: torch.dtype,
-                   device: torch.device) -> List[torch.Tensor]:
+                   device: torch.device, virtual_engine: int) -> List[torch.Tensor]:
     """Receive tensors from the previous pipeline model parallel rank."""
     sizes = list(sizes)
     combined_tensor = torch.empty([sizes[0] * num_tensors] + sizes[1:],

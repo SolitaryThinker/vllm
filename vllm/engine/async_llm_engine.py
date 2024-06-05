@@ -19,6 +19,7 @@ from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import ExecuteModelRequest, MultiModalData, SamplerOutput
 from vllm.usage.usage_lib import UsageContext
+import nvtx
 
 logger = init_logger(__name__)
 ENGINE_ITERATION_TIMEOUT_S = envs.VLLM_ENGINE_ITERATION_TIMEOUT_S
@@ -211,6 +212,7 @@ class _AsyncLLMEngine(LLMEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
+        nvtx.push_range(message=f"step_async {virtual_engine}", color="green", domain=f've_{virtual_engine}')
         seq_group_metadata_list, scheduler_outputs = self.scheduler[
             virtual_engine].schedule()
 
@@ -230,12 +232,15 @@ class _AsyncLLMEngine(LLMEngine):
         else:
             output = []
 
+        nvtx.push_range(message=f"process_output {virtual_engine}", color="green", domain=f've_{virtual_engine}')
         request_outputs = self._process_model_outputs(
             output, scheduler_outputs.scheduled_seq_groups,
             scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
+        nvtx.pop_range(domain=f've_{virtual_engine}')
 
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
+        nvtx.pop_range(domain=f've_{virtual_engine}')
 
         return request_outputs
 
@@ -499,6 +504,7 @@ class AsyncLLMEngine:
         else:
             self.engine.abort_request(request_ids)
 
+    @nvtx.annotate("run_engine_loop")
     async def run_engine_loop(self):
         if self.engine_use_ray:
             pipeline_parallel_size = 1  # type: ignore
@@ -511,6 +517,7 @@ class AsyncLLMEngine:
                 logger.debug("Waiting for new requests...")
                 await self._request_tracker.wait_for_new_requests()
                 logger.debug("Got new requests!")
+                #print('got new requests')
                 requests_in_progress = [
                     asyncio.create_task(
                         asyncio.wait_for(self.engine_step(ve),
@@ -522,11 +529,21 @@ class AsyncLLMEngine:
             # Abort if iteration takes too long due to unrecoverable errors
             # (eg. NCCL timeouts).
             try:
+                # for ve in range(pipeline_parallel_size):
+                #     if not has_requests_in_progress[ve]:
+                #         continue
+                #     result = await requests_in_progress[ve]
+                #     if not result:
+                #         has_requests_in_progress[ve] = False
+                
+                
+                
                 done, _ = await asyncio.wait(
                     requests_in_progress, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     result = task.result()
                     virtual_engine = requests_in_progress.index(task)
+                    #print('==========virtual engine done ', virtual_engine)
                     if self.engine_use_ray:
                         has_unfinished_requests = \
                             await self.engine.\
@@ -535,6 +552,7 @@ class AsyncLLMEngine:
                         has_unfinished_requests = \
                             self.engine.has_unfinished_requests_for_virtual_engine(virtual_engine)
                     if result or has_unfinished_requests:
+                        #print('---------------starting new task', virtual_engine)
                         requests_in_progress[
                             virtual_engine] = asyncio.create_task(
                                 asyncio.wait_for(

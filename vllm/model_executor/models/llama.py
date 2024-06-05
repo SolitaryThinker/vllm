@@ -289,6 +289,7 @@ class LlamaModel(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        virtual_engine: int,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if is_pipeline_model_parallel_first_rank():
@@ -304,7 +305,7 @@ class LlamaModel(nn.Module):
                 sizes = list(input_ids.size()) + [self.config.hidden_size]
             hidden_states, residual = recv_prev_rank(
                 2, torch.Size(sizes), self.embed_tokens.weight.dtype,
-                self.embed_tokens.weight.device)
+                self.embed_tokens.weight.device, virtual_engine)
 
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
@@ -319,7 +320,7 @@ class LlamaModel(nn.Module):
         if is_pipeline_model_parallel_last_rank():
             hidden_states, _ = self.norm(hidden_states, residual)
         else:
-            send_next_rank([hidden_states, residual])
+            send_next_rank([hidden_states, residual], virtual_engine)
         return hidden_states
 
 
@@ -386,9 +387,10 @@ class LlamaForCausalLM(nn.Module):
         positions: torch.Tensor,
         kv_caches: List[torch.Tensor],
         attn_metadata: AttentionMetadata,
+        virtual_engine: int,
     ) -> torch.Tensor:
         hidden_states = self.model(input_ids, positions, kv_caches,
-                                   attn_metadata)
+                                   attn_metadata, virtual_engine)
         return hidden_states
 
     def compute_logits(self, hidden_states: torch.Tensor,

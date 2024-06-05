@@ -138,8 +138,32 @@ def gpu_p2p_access_check(i: int, j: int) -> bool:
 
 def get_pp_indices(num_hidden_layers: int, pp_rank: int,
                    pp_size: int) -> Tuple[int, int]:
+
     layers_per_partition = divide(num_hidden_layers, pp_size)
     start_layer = pp_rank * layers_per_partition
     end_layer = start_layer + layers_per_partition
+    return (start_layer, end_layer)
+    if pp_size <= 2:
+        layers_per_partition = divide(num_hidden_layers, pp_size)
+        start_layer = pp_rank * layers_per_partition
+        end_layer = start_layer + layers_per_partition
+    else:
+        # uneven partitioning to account for extra work done by the first and last rank
+        layers_per_partition = divide(num_hidden_layers, pp_size)
+        #pp_size -2 will each take a layer from the first and last rank
+        first_rank_layers = layers_per_partition - (pp_size - 2) * 2
+        last_rank_layers = layers_per_partition - (pp_size - 2) * 2
+        layers_per_partition += 4
 
+        if pp_rank == 0:
+            start_layer = 0
+            end_layer = start_layer + first_rank_layers
+        elif pp_rank == pp_size - 1:
+            start_layer = num_hidden_layers - last_rank_layers
+            end_layer = num_hidden_layers
+        else:
+            start_layer = first_rank_layers + (pp_rank - 1) * layers_per_partition
+            end_layer = start_layer + layers_per_partition
+        print('pp_rank:', pp_rank, 'start_layer:', start_layer, 'end_layer:', end_layer)
+            
     return (start_layer, end_layer)

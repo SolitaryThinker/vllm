@@ -26,6 +26,8 @@ from vllm.sequence import (MultiModalData, SamplerOutput, SequenceData,
 from vllm.utils import (CudaMemoryProfiler, get_kv_cache_torch_dtype, is_hip,
                         is_pin_memory_available, make_tensor_with_pad)
 
+import nvtx
+
 logger = init_logger(__name__)
 
 _PAD_SLOT_ID = -1
@@ -713,6 +715,7 @@ class ModelRunner:
             "positions": input_positions,
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
+            "virtual_engine": virtual_engine,
         }
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
@@ -904,14 +907,15 @@ class ModelRunner:
                         self.set_active_loras(set(), lora_mapping)
 
                     graph_runner = CUDAGraphRunner(self.model)
-                    graph_runner.capture(
-                        input_tokens[:batch_size],
-                        input_positions[:batch_size],
-                        kv_caches[virtual_engine],
-                        attn_metadata,
-                        memory_pool=self.graph_memory_pool,
-                        stream=graph_capture_context.stream,
-                    )
+                    with nvtx.annotate("graph_capture", batch_size):
+                        graph_runner.capture(
+                            input_tokens[:batch_size],
+                            input_positions[:batch_size],
+                            kv_caches[virtual_engine],
+                            attn_metadata,
+                            memory_pool=self.graph_memory_pool,
+                            stream=graph_capture_context.stream,
+                        )
                     self.graph_memory_pool = graph_runner.graph.pool()
                     self.graph_runners[virtual_engine][
                         batch_size] = graph_runner

@@ -25,6 +25,10 @@ _PP_DEVICE_GROUP: Optional[ProcessGroup] = None
 _PP_CPU_GROUP: Optional[ProcessGroup] = None
 _PP_PYNCCL_COMMUNICATOR = None
 
+_PP_VE_DEVICE_GROUPS: Optional[List[ProcessGroup]] = None
+_PP_VE_CPU_GROUPS: Optional[List[ProcessGroup]] = None
+_PP_VE_PYNCCL_COMMUNICATOR = None
+
 # when people blindly call `torch.distributed.all_reduce` etc,
 # it will use this group. It is initialized with the `backend`
 # parameter of `init_distributed_environment` below.
@@ -60,6 +64,10 @@ def set_custom_all_reduce(enable: bool):
 def get_pp_pynccl_communicator():
     global _PP_PYNCCL_COMMUNICATOR
     return _PP_PYNCCL_COMMUNICATOR
+
+def get_pp_ve_pynccl_communicator(virtual_engine: int):
+    global _PP_VE_PYNCCL_COMMUNICATOR
+    return _PP_VE_PYNCCL_COMMUNICATOR[virtual_engine]
 
 
 def get_tp_pynccl_communicator():
@@ -205,16 +213,23 @@ def initialize_model_parallel(
     global _PP_DEVICE_GROUP, _PP_CPU_GROUP
     global _PP_PYNCCL_COMMUNICATOR
     global _PP_GLOBAL_RANKS
+    global _PP_VE_DEVICE_GROUPS, _PP_VE_CPU_GROUPS
+    _PP_VE_DEVICE_GROUPS = [None] * pipeline_model_parallel_size
+    _PP_VE_CPU_GROUPS = [None] * pipeline_model_parallel_size
     assert _PP_DEVICE_GROUP is None, (
         "pipeline model parallel group is already initialized")
-    for i in range(num_pipeline_model_parallel_groups):
-        ranks = list(range(i, world_size, num_pipeline_model_parallel_groups))
-        group = torch.distributed.new_group(ranks, backend=backend)
-        cpu_group = torch.distributed.new_group(ranks, backend="gloo")
-        if rank in ranks:
-            _PP_DEVICE_GROUP = group
-            _PP_CPU_GROUP = cpu_group
-            _PP_GLOBAL_RANKS = ranks
+    for ve in range(pipeline_model_parallel_size):
+        for i in range(num_pipeline_model_parallel_groups):
+            ranks = list(range(i, world_size, num_pipeline_model_parallel_groups))
+            group = torch.distributed.new_group(ranks, backend=backend)
+            cpu_group = torch.distributed.new_group(ranks, backend="gloo")
+            if rank in ranks:
+                if ve == 0:
+                    _PP_DEVICE_GROUP = group
+                    _PP_CPU_GROUP = cpu_group
+                    _PP_GLOBAL_RANKS = ranks
+                _PP_VE_DEVICE_GROUPS[ve] = group
+                _PP_VE_CPU_GROUPS[ve] = cpu_group
 
     _PP_PYNCCL_COMMUNICATOR = PyNcclCommunicator(
         group=_PP_CPU_GROUP,
@@ -282,11 +297,25 @@ def get_pipeline_model_parallel_group():
     return _PP_DEVICE_GROUP
 
 
+def get_pipeline_model_parallel_ve_group(virtual_engine: int):
+    """Get the pipeline model parallel group the caller rank belongs to."""
+    assert _PP_VE_DEVICE_GROUPS is not None, (
+        "pipeline model parallel ve group is not initialized")
+    return _PP_VE_DEVICE_GROUPS[virtual_engine]
+
+
 def get_pipeline_model_parallel_cpu_group():
     """Get the pipeline model parallel cpu group the caller rank belongs to."""
     assert _PP_CPU_GROUP is not None, (
         "pipeline model parallel cpu group is not initialized")
     return _PP_CPU_GROUP
+
+    
+def get_pipeline_model_parallel_ve_cpu_group(virtual_engine: int):
+    """Get the pipeline model parallel cpu group the caller rank belongs to."""
+    assert _PP_VE_CPU_GROUPS is not None, (
+        "pipeline model parallel ve cpu group is not initialized")
+    return _PP_VE_CPU_GROUPS[virtual_engine]
 
 
 def get_tensor_model_parallel_world_size():
