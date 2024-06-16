@@ -18,6 +18,7 @@ class DistributedGPUExecutor(GPUExecutor):
         # This is non-None when the execute model loop is running
         # in the parallel workers. It's a coroutine in the AsyncLLMEngine case.
         self.parallel_worker_tasks: Optional[Union[Any, Awaitable[Any]]] = None
+        self.driver_worker_tasks: Optional[Union[Any, Awaitable[Any]]] = None
         # Updated by implementations that require additional args to be passed
         # to the _run_workers execute_model call
         self.extra_execute_model_run_workers_kwargs: Dict[str, Any] = {}
@@ -156,14 +157,18 @@ class DistributedGPUExecutorAsync(DistributedGPUExecutor, ExecutorAsyncBase):
 
     async def execute_model_async(
             self,
-            execute_model_req: ExecuteModelRequest) -> List[SamplerOutput]:
+            execute_model_req: ExecuteModelRequest,
+            has_new_request=False) -> List[SamplerOutput]:
         if self.parallel_worker_tasks is None:
             # Start model execution loop running in the parallel workers
             self.parallel_worker_tasks = asyncio.create_task(
                 self._start_worker_execution_loop())
+        # if self.driver_worker_tasks is None:
+        #     self.driver_worker_tasks = asyncio.create_task(
+        #         self._start_driver_execution_loop())
 
         # Only the driver worker returns the sampling results.
-        return await self._driver_execute_model_async(execute_model_req)
+        return await self._driver_execute_model_async(execute_model_req, has_new_request)
 
     async def stop_remote_worker_execution_loop_async(self) -> None:
         if self.parallel_worker_tasks is None:
@@ -194,4 +199,8 @@ class DistributedGPUExecutorAsync(DistributedGPUExecutor, ExecutorAsyncBase):
         the loop or None of them is running the loop. Loop can be stopped by
         `stop_remote_worker_execution_loop`.
         The API is idempotent (guarantee only 1 loop run at any moment)."""
+        raise NotImplementedError
+    
+    @abstractmethod
+    async def _start_driver_execution_loop(self):
         raise NotImplementedError

@@ -13,6 +13,8 @@ from vllm.logger import init_logger
 from vllm.sequence import ExecuteModelRequest, SamplerOutput
 from vllm.utils import (get_distributed_init_method, get_ip, get_open_port,
                         get_vllm_instance_id, make_async)
+from queue import Queue
+from threading import Semaphore
 
 if ray is not None:
     from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -343,20 +345,40 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.driver_exec_method = make_async(self.driver_worker.execute_method)
+        self.scheduler_queue = asyncio.Queue()
+        self.output_queue = asyncio.Queue()
+        self.new_request_sema = asyncio.Semaphore(0)
 
     async def _driver_execute_model_async(
         self,
-        execute_model_req: Optional[ExecuteModelRequest] = None
+        execute_model_req: Optional[ExecuteModelRequest] = None,
+        has_new_request: bool = False,
     ) -> List[SamplerOutput]:
+        #if not execute_model_req and not self.scheduler_queue.empty():
+        if execute_model_req or has_new_request:
+            #await self.new_request_sema.acquire()
+            # print('get scheduler queue')
+            execute_model_req = await self.scheduler_queue.get()
+            # print('got scheduler queue')
+            #assert execute_model_req is not None
+        coros = []
         async with self.pp_locks[0]:
-            output = await self.driver_exec_method("execute_model",
-                                                   execute_model_req)
+            # output = await self.driver_exec_method("execute_model",
+            #                                        execute_model_req)
+            coros.append(self.driver_exec_method("execute_model", execute_model_req))
         for pp_rank, driver_worker in enumerate(self.tp_driver_workers,
                                                 start=1):
             async with self.pp_locks[pp_rank]:
-                output = await driver_worker.execute_method.remote(
-                    "execute_model", execute_model_req)
-        return output
+                # output = await driver_worker.execute_method.remote(
+                #     "execute_model", execute_model_req)
+                coros.append(driver_worker.execute_method.remote("execute_model", execute_model_req))
+        # print('before gaterh ')
+        output = await asyncio.gather(*coros)
+        # print('after gaterh ')
+        #print(output[-1])
+        if execute_model_req or has_new_request:
+            await self.output_queue.put(output[-1])
+        return output[-1]
 
     async def _start_worker_execution_loop(self):
         coros = [
@@ -364,3 +386,11 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
             for worker in self.tp_parallel_workers
         ]
         return await asyncio.gather(*coros)
+
+    async def _start_driver_execution_loop(self):
+        while True:
+            print('before sema==================')
+            self.new_request_sema.acquire()
+            print('after sema')
+            await self._driver_execute_model_async(has_new_request=True)
+            await asyncio.sleep(0)

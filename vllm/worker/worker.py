@@ -304,6 +304,16 @@ class Worker(WorkerBase):
         return [output]
 
     @torch.inference_mode()
+    def start_driver_execution_loop(self) -> None:
+        """Execute model loop in the driver worker.
+
+        You can stop the loop by calling `stop_remote_worker_execution_loop`.
+        """
+        while self.execute_model():
+            pass
+
+
+    @torch.inference_mode()
     def start_worker_execution_loop(self) -> None:
         """Execute model loop in parallel worker.
 
