@@ -13,7 +13,9 @@ from vllm.distributed import (broadcast_tensor_dict,
                               ensure_model_parallel_initialized,
                               get_tensor_model_parallel_src_rank_and_group,
                               init_distributed_environment,
-                              set_custom_all_reduce)
+                              set_custom_all_reduce,
+                              get_tensor_model_parallel_rank,
+                              get_pipeline_model_parallel_rank)
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
 from vllm.sequence import ExecuteModelRequest, PoolerOutput, SamplerOutput
@@ -21,6 +23,8 @@ from vllm.worker.cache_engine import CacheEngine
 from vllm.worker.embedding_model_runner import EmbeddingModelRunner
 from vllm.worker.model_runner import ModelRunner
 from vllm.worker.worker_base import WorkerBase
+
+from queue import Queue
 
 
 class Worker(WorkerBase):
@@ -91,6 +95,13 @@ class Worker(WorkerBase):
         self.gpu_cache: List[Optional[List[torch.tensor]]] = [
             None for _ in range(parallel_config.pipeline_parallel_size)
         ]
+
+        self.tensor_model_parallel_rank = get_tensor_model_parallel_rank()
+        self.pipeline_model_parallel_rank = get_pipeline_model_parallel_rank()
+
+        self.is_tensor_parallel_rank_zero = self.tensor_model_parallel_rank == 0
+        self.is_first_pipeline_stage = self.pipeline_model_parallel_rank == 0
+        self.is_last_pipeline_stage = self.pipeline_model_parallel_rank == self.parallel_config.pipeline_parallel_size - 1
 
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
@@ -303,16 +314,28 @@ class Worker(WorkerBase):
         # to conform to interface.
         return [output]
 
+    def enqueue(self, execute_model_req: ExecuteModelRequest) -> None:
+        self.execution_queue.put(execute_model_req)
+
     @torch.inference_mode()
-    def start_driver_execution_loop(self) -> None:
+    def _driver_execution_loop(self) -> None:
         """Execute model loop in the driver worker.
 
         You can stop the loop by calling `stop_remote_worker_execution_loop`.
         """
-        while self.execute_model():
-            pass
+        while True:
+            _ = self.execution_queue.get()
+            output = self.execute_model()
+            if not self.is_tensor_parallel_rank_zero:
+                continue
 
+            if self.is_first_pipeline_stage or self.is_last_pipeline_stage:
+                self.output_queue.put(output)
+                
+    def get_output(self):
+        return self.output_queue.get()
 
+    
     @torch.inference_mode()
     def start_worker_execution_loop(self) -> None:
         """Execute model loop in parallel worker.

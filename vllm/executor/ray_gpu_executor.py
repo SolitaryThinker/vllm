@@ -4,6 +4,8 @@ import pickle
 from collections import defaultdict
 from itertools import islice, repeat
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+import functools
+import time
 
 import vllm.envs as envs
 from vllm.executor.distributed_gpu_executor import (  # yapf: disable
@@ -201,6 +203,26 @@ class RayGPUExecutor(DistributedGPUExecutor):
         """
         return self.driver_worker.execute_method("execute_model",
                                                  execute_model_req)
+
+    def _run_worker(self, 
+                    model_parallel_rank: Tuple[int, int],
+                    method:str,
+                    *args,
+                    **kwargs,
+                    ) -> Any:
+        worker = self.workers[model_parallel_rank[0] * self.parallel_config.tensor_parallel_size + model_parallel_rank[1]]
+        worker = self.driver_worker
+        executor = functools.partial(worker.execute_method, method)
+        output = executor(*args, **kwargs)
+        while True:
+            try:
+                output = ray.get(output)
+                break
+            except ray.exceptions.GetTimeoutError:
+                time.sleep(0.005)
+                continue
+
+        return output
 
     def _run_workers(
         self,
