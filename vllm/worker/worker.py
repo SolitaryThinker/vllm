@@ -14,7 +14,7 @@ from vllm.distributed import (broadcast_tensor_dict,
                               get_tensor_model_parallel_src_rank_and_group,
                               init_distributed_environment,
                               set_custom_all_reduce,
-                              get_tensor_model_parallel_rank,
+                              is_pipeline_model_parallel_last_rank,
                               get_pipeline_model_parallel_rank)
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
@@ -96,12 +96,13 @@ class Worker(WorkerBase):
             None for _ in range(parallel_config.pipeline_parallel_size)
         ]
 
-        self.tensor_model_parallel_rank = get_tensor_model_parallel_rank()
-        self.pipeline_model_parallel_rank = get_pipeline_model_parallel_rank()
+        # self.tensor_model_parallel_rank = get_tensor_model_parallel_rank()
+        # self.pipeline_model_parallel_rank = get_pipeline_model_parallel_rank()
 
-        self.is_tensor_parallel_rank_zero = self.tensor_model_parallel_rank == 0
-        self.is_first_pipeline_stage = self.pipeline_model_parallel_rank == 0
-        self.is_last_pipeline_stage = self.pipeline_model_parallel_rank == self.parallel_config.pipeline_parallel_size - 1
+        # self.is_tensor_parallel_rank_zero = self.tensor_model_parallel_rank == 0
+        # self.is_first_pipeline_stage = self.pipeline_model_parallel_rank == 0
+        # self.is_last_pipeline_stage = self.pipeline_model_parallel_rank == self.parallel_config.pipeline_parallel_size - 1
+        self.output_queue = Queue()
 
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
@@ -254,20 +255,25 @@ class Worker(WorkerBase):
         src_rank, tp_group, cpu_tp_group = (
             get_tensor_model_parallel_src_rank_and_group())
         if execute_model_req is None:
+            assert False
             # This signals that there's no more requests to process for now.
             # All workers are running infinite loop with broadcast_tensor_dict,
             # and it stops the loop when the driver broadcasts an empty input.
             # Send an empty input to notify all other workers to stop their
             # execution loop.
+            print('broadcasting======')
             broadcast_tensor_dict({},
                                   src=src_rank,
                                   group=tp_group,
                                   metadata_group=cpu_tp_group)
+            print('after broadcasting======')
             return []
 
         seq_group_metadata_list = execute_model_req.seq_group_metadata_list
         num_seq_groups = len(seq_group_metadata_list)
         if execute_model_req.virtual_engine is None:
+            print('worker execute model assert false2')
+            assert False
             virtual_engine = 0
         else:
             virtual_engine = execute_model_req.virtual_engine
@@ -304,33 +310,39 @@ class Worker(WorkerBase):
 
         # If there is no input, we don't need to execute the model.
         if num_seq_groups == 0:
+            if is_pipeline_model_parallel_last_rank():
+                self.output_queue.put([])
             return []
 
         output = self.model_runner.execute_model(
             seq_group_metadata_list, self.gpu_cache[virtual_engine],
             virtual_engine)
 
+        if is_pipeline_model_parallel_last_rank():
+            self.output_queue.put(output)
+
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.
-        return [output]
+        return []
+        # return [output]
 
     def enqueue(self, execute_model_req: ExecuteModelRequest) -> None:
         self.execution_queue.put(execute_model_req)
 
-    @torch.inference_mode()
-    def _driver_execution_loop(self) -> None:
-        """Execute model loop in the driver worker.
+    # @torch.inference_mode()
+    # def _driver_execution_loop(self) -> None:
+    #     """Execute model loop in the driver worker.
 
-        You can stop the loop by calling `stop_remote_worker_execution_loop`.
-        """
-        while True:
-            _ = self.execution_queue.get()
-            output = self.execute_model()
-            if not self.is_tensor_parallel_rank_zero:
-                continue
+    #     You can stop the loop by calling `stop_remote_worker_execution_loop`.
+    #     """
+    #     while True:
+    #         _ = self.execution_queue.get()
+    #         output = self.execute_model()
+    #         if not self.is_tensor_parallel_rank_zero:
+    #             continue
 
-            if self.is_first_pipeline_stage or self.is_last_pipeline_stage:
-                self.output_queue.put(output)
+    #         if self.is_first_pipeline_stage or self.is_last_pipeline_stage:
+    #             self.output_queue.put(output)
                 
     def get_output(self):
         return self.output_queue.get()

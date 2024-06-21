@@ -203,29 +203,10 @@ class RayGPUExecutor(DistributedGPUExecutor):
         """
         return self.driver_worker.execute_method("execute_model",
                                                  execute_model_req)
+    def get_output(self):
+        return self.workers[-1].execute_method.remote("get_output")
 
-    def _run_worker(self, 
-                    model_parallel_rank: Tuple[int, int],
-                    method:str,
-                    *args,
-                    **kwargs,
-                    ) -> Any:
-        worker = self.workers[model_parallel_rank[0] * self.parallel_config.tensor_parallel_size + model_parallel_rank[1]]
-        worker = self.driver_worker
-        executor = functools.partial(worker.execute_method, method)
-        output = executor(*args, **kwargs)
-        while True:
-            try:
-                output = ray.get(output)
-                break
-            except ray.exceptions.GetTimeoutError:
-                time.sleep(0.005)
-                continue
-
-        return output
-
-    def _run_workers(
-        self,
+    def _run_workers(self, 
         method: str,
         *args,
         async_run_tensor_parallel_workers_only: bool = False,
@@ -368,7 +349,7 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
         super().__init__(*args, **kwargs)
         self.driver_exec_method = make_async(self.driver_worker.execute_method)
         self.scheduler_queue = asyncio.Queue()
-        self.output_queue = asyncio.Queue()
+        #self.output_queue = asyncio.Queue()
         self.new_request_sema = asyncio.Semaphore(0)
 
     async def _driver_execute_model_async(
@@ -376,11 +357,13 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
         execute_model_req: Optional[ExecuteModelRequest] = None,
         has_new_request: bool = False,
     ) -> List[SamplerOutput]:
+            # pdb.set_trace()
         #if not execute_model_req and not self.scheduler_queue.empty():
-        if execute_model_req or has_new_request:
+        # if execute_model_req or has_new_request:
             #await self.new_request_sema.acquire()
             # print('get scheduler queue')
-            execute_model_req = await self.scheduler_queue.get()
+            # execute_model_req = await self.scheduler_queue.get()
+            # pass
             # print('got scheduler queue')
             #assert execute_model_req is not None
         coros = []
@@ -398,9 +381,10 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
         output = await asyncio.gather(*coros)
         # print('after gaterh ')
         #print(output[-1])
-        if execute_model_req or has_new_request:
-            await self.output_queue.put(output[-1])
-        return output[-1]
+        # if execute_model_req or has_new_request:
+        #     await self.output_queue.put(output[-1])
+        return []
+        # return output[-1]
 
     async def _start_worker_execution_loop(self):
         coros = [

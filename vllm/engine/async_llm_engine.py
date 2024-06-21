@@ -20,6 +20,7 @@ from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import ExecuteModelRequest, MultiModalData, SamplerOutput
 from vllm.usage.usage_lib import UsageContext
+import pdb
 
 logger = init_logger(__name__)
 ENGINE_ITERATION_TIMEOUT_S = envs.VLLM_ENGINE_ITERATION_TIMEOUT_S
@@ -202,7 +203,7 @@ class _AsyncLLMEngine(LLMEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.request_metadata_queue = asyncio.Queue(1)
+        self.request_metadata_queue = asyncio.Queue()
         self.requests_in_progress = asyncio.Semaphore(0)
         self.requests_in_progress_event = asyncio.Event()
         self.has_requests_in_progress = [False] * 2
@@ -210,16 +211,22 @@ class _AsyncLLMEngine(LLMEngine):
 
     
     async def enqueue_async(self):
+        
         while True:
+            # print('req in progress')
             await self.requests_in_progress.acquire()
+            # pdb.set_trace()
             # await self.requests_in_progress_event.wait()
             # self.requests_in_progress_event.clear()
+            # print('after req in progress')
             for ve in range(2):
                 if self.restart_ve[ve]:
                     self.restart_ve[ve] = False
                     seq_group_metadata_list, scheduler_outputs = self.scheduler[ve].schedule()
 
+                    # print('befpre metadata put')
                     await self.request_metadata_queue.put((seq_group_metadata_list, scheduler_outputs, ve))
+                    # print('after metadata put')
                     # will block once we have enqueued 10
                     if not scheduler_outputs.is_empty():
                         # Execute the model.
@@ -228,30 +235,44 @@ class _AsyncLLMEngine(LLMEngine):
                             blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
                             blocks_to_swap_out=scheduler_outputs.blocks_to_swap_out,
                             blocks_to_copy=scheduler_outputs.blocks_to_copy,
-                            virtual_engine=0,
+                            virtual_engine=ve,
                             num_lookahead_slots=scheduler_outputs.num_lookahead_slots,
                             running_queue_size=scheduler_outputs.running_queue_size,
                         )
-                        await self.model_executor.scheduler_queue.put(execute_model_req)
-                        print(self.model_executor.scheduler_queue.qsize())
-                        # output = await self.model_executor.execute_model_async(
-                        #     execute_model_req)
+                        # await self.model_executor.scheduler_queue.put(execute_model_req)
+                        # print(self.model_executor.scheduler_queue.qsize())
+                        _ = await self.model_executor.execute_model_async(
+                            execute_model_req)
                         #self.model_executor.new_request_sema.release()
                     # return not scheduler_outputs.is_empty()
 
     async def step_async_loop(self):
-        self.model_executor._run_workers('enqueue', req=)
+        # self.model_executor._run_workers('enqueue', req=)
         
-        self.model_executor._run_worker((0,0), 'get_output')
+        # self.model_executor._run_worker((0,0), 'get_output')
         while True:
             _ = await self.model_executor.execute_model_async(None,
                 has_new_request=True)
 
     async def output_async(self) -> Tuple[List[Union[RequestOutput, EmbeddingRequestOutput]], int]:
+        # print('waiting for metadata queue')
+        # print('metadata queue size:', self.request_metadata_queue.qsize())
+        # print('requests_in_progress:', self.has_requests_in_progress)
+        # print('restart:', self.restart_ve)
+        # print()
         seq_group_metadata_list, scheduler_outputs, sched_idx = await self.request_metadata_queue.get()
+        # print('after metadata queue')
+        # pdb.set_trace()
         if not scheduler_outputs.is_empty():
             # print('waiting get')
-            output = await self.model_executor.output_queue.get()
+            # output = await self.model_executor.output_queue.get()
+            # output = self.model_executor.workhers[-1].output_queue.get()
+            output = self.model_executor.get_output()
+            # print('===================')
+            # print(output)
+            # ray.get(output)
+            output = await asyncio.gather(output)
+            # print(output)
             # print('got')
         else:
             output = []
@@ -541,23 +562,17 @@ class AsyncLLMEngine:
 
     async def task_process_request(self) -> None:
         while True:
+            # import pdb; pdb.set_trace()
             logger.debug("Waiting for new requests...")
-            if self.engine_use_ray:
-                await (self.engine.stop_remote_worker_execution_loop.
-                        remote()  # type: ignore
-                        )
-            else:
-                #await self.engine.stop_remote_worker_execution_loop_async()
-                pass
-            await self._request_tracker.wait_for_new_requests()
-                # logger.debug("Got new requests!")
-                # requests_in_progress = [
-                #     asyncio.create_task(
-                #         asyncio.wait_for(self.engine_step(ve),
-                #                             ENGINE_ITERATION_TIMEOUT_S))
-                #     for ve in range(pipeline_parallel_size)
-                # ]
-                # has_requests_in_progress = [True] * pipeline_parallel_size
+            if not any(self.engine.has_requests_in_progress):
+                if self.engine_use_ray:
+                    await (self.engine.stop_remote_worker_execution_loop.
+                            remote()  # type: ignore
+                            )
+                else:
+                    #await self.engine.stop_remote_worker_execution_loop_async()
+                    pass
+                await self._request_tracker.wait_for_new_requests()
 
             new_requests, finished_requests = (
                 self._request_tracker.get_new_and_finished_requests())
@@ -581,13 +596,16 @@ class AsyncLLMEngine:
 
             if finished_requests:
                 await self._engine_abort(finished_requests)
-            if len(new_requests) > 0 and (not self.engine.has_requests_in_progress[0] and not self.engine.has_requests_in_progress[1]):
-                self.engine.requests_in_progress.release()
-                for i in range(2):
-                    self.engine.restart_ve[i] = not self.engine.has_requests_in_progress[i]
-                    self.engine.has_requests_in_progress[i] = True
+            # if len(new_requests) > 0 and (not self.engine.has_requests_in_progress[0] and not self.engine.has_requests_in_progress[1]):
+            if len(new_requests) > 0:
                 # self.engine.requests_in_progress.release()
+                for i in range(2):
+                    # self.engine.restart_ve[i] = not self.engine.has_requests_in_progress[i]
+                    self.engine.restart_ve[i] = True
+                    self.engine.has_requests_in_progress[i] = True
+                self.engine.requests_in_progress.release()
                 self.engine.requests_in_progress_event.set()
+            await asyncio.sleep(0.1)
                 #self.engine.requests_in_progress_event.set()
             # self.engine.requests_in_progress.release()
         
@@ -646,7 +664,8 @@ class AsyncLLMEngine:
     async def output_loop(self):
         while True:
             request_outputs, sched_idx, more = await self.engine.output_async()
-            print('more', more)
+            # print('more', more)
+            # import pdb; pdb.set_trace()
             # Put the outputs into the corresponding streams.
             for request_output in request_outputs:
                 self._request_tracker.process_request_output(
@@ -682,11 +701,12 @@ class AsyncLLMEngine:
         self.enqueue_task = asyncio.create_task(self.engine.enqueue_async())
 
         # executing model (launching ray workers)
-        self.driver_task = asyncio.create_task(self.engine.step_async_loop())
+        # self.driver_task = asyncio.create_task(self.engine.step_async_loop())
 
         # getting output
         self.output_task = asyncio.create_task(self.output_loop())
-        await asyncio.gather(self.process_request_task, self.enqueue_task, self.driver_task, self.output_task)
+        # await asyncio.gather(self.process_request_task, self.enqueue_task, self.driver_task, self.output_task)
+        await asyncio.gather(self.process_request_task, self.enqueue_task, self.output_task)
         return
         while True:
             if not any(has_requests_in_progress):
