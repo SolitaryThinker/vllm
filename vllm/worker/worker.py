@@ -25,6 +25,7 @@ from vllm.worker.model_runner import ModelRunner
 from vllm.worker.worker_base import WorkerBase
 
 from queue import Queue
+import nvtx
 
 
 class Worker(WorkerBase):
@@ -248,6 +249,7 @@ class Worker(WorkerBase):
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[Union[SamplerOutput, PoolerOutput]]:
+        # nvtx.push_range('execute_model', domain=f've_{execute_model_req.virtual_engine}')
         if not self.is_driver_worker:
             self._execute_model_non_driver()
             return []
@@ -320,6 +322,7 @@ class Worker(WorkerBase):
 
         if is_pipeline_model_parallel_last_rank():
             self.output_queue.put(output)
+        # nvtx.pop_range(domain=f've_{execute_model_req.virtual_engine}')
 
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.

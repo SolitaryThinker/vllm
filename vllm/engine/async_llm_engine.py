@@ -556,11 +556,6 @@ class AsyncLLMEngine:
                 self._engine_class).remote
         return engine_class(*args, **kwargs)
 
-    async def engine_step_first(self) -> bool:
-        pass
-    async def engine_step_second(self) -> bool:
-        pass
-
     async def task_process_request(self) -> None:
         while True:
             # import pdb; pdb.set_trace()
@@ -605,7 +600,7 @@ class AsyncLLMEngine:
                     self.engine.restart_ve[i] = True
                     self.engine.has_requests_in_progress[i] = True
                 self.engine.requests_in_progress.release()
-                self.engine.requests_in_progress_event.set()
+                # self.engine.requests_in_progress_event.set()
             # await asyncio.sleep(0.001)
                 #self.engine.requests_in_progress_event.set()
             # self.engine.requests_in_progress.release()
@@ -674,7 +669,7 @@ class AsyncLLMEngine:
             has_unfinished_request = len(request_outputs) > 0 or self.engine.scheduler[sched_idx].has_unfinished_seqs()    
             if has_unfinished_request:
                 self.engine.requests_in_progress.release()
-                self.engine.requests_in_progress_event.set()
+                # self.engine.requests_in_progress_event.set()
                 self.engine.has_requests_in_progress[sched_idx] = True
                 self.engine.restart_ve[sched_idx] = True
             else:
