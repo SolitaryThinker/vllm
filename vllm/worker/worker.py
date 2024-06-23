@@ -249,7 +249,8 @@ class Worker(WorkerBase):
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None
     ) -> List[Union[SamplerOutput, PoolerOutput]]:
-        # nvtx.push_range('execute_model', domain=f've_{execute_model_req.virtual_engine}')
+        # print('start execute model')
+        nvtx.push_range('execute_model', domain=f've_{execute_model_req.virtual_engine}')
         if not self.is_driver_worker:
             self._execute_model_non_driver()
             return []
@@ -315,14 +316,17 @@ class Worker(WorkerBase):
             if is_pipeline_model_parallel_last_rank():
                 self.output_queue.put([])
             return []
-
+        nvtx.mark('before execute model', color='red', domain=f've_{execute_model_req.virtual_engine}')
         output = self.model_runner.execute_model(
             seq_group_metadata_list, self.gpu_cache[virtual_engine],
             virtual_engine)
+        nvtx.mark('after execute model', color='red', domain=f've_{execute_model_req.virtual_engine}')
 
         if is_pipeline_model_parallel_last_rank():
+            nvtx.mark('before output put', color='red', domain=f've_{execute_model_req.virtual_engine}')
             self.output_queue.put(output)
-        # nvtx.pop_range(domain=f've_{execute_model_req.virtual_engine}')
+            nvtx.mark('after output put', color='red', domain=f've_{execute_model_req.virtual_engine}')
+        nvtx.pop_range(domain=f've_{execute_model_req.virtual_engine}')
 
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.

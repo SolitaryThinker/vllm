@@ -17,6 +17,7 @@ from vllm.utils import (get_distributed_init_method, get_ip, get_open_port,
                         get_vllm_instance_id, make_async)
 from queue import Queue
 from threading import Semaphore
+import nvtx
 
 if ray is not None:
     from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -351,12 +352,15 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
         self.scheduler_queue = asyncio.Queue()
         #self.output_queue = asyncio.Queue()
         self.new_request_sema = asyncio.Semaphore(0)
+        self.launched = asyncio.Semaphore(0)
 
     async def _driver_execute_model_async(
         self,
-        execute_model_req: Optional[ExecuteModelRequest] = None,
+        # execute_model_req: Optional[ExecuteModelRequest] = None,
+        execute_model_req,
         has_new_request: bool = False,
-    ) -> List[SamplerOutput]:
+    ):
+    # ) -> List[SamplerOutput]:
             # pdb.set_trace()
         #if not execute_model_req and not self.scheduler_queue.empty():
         # if execute_model_req or has_new_request:
@@ -366,19 +370,59 @@ class RayGPUExecutorAsync(RayGPUExecutor, DistributedGPUExecutorAsync):
             # pass
             # print('got scheduler queue')
             #assert execute_model_req is not None
-        coros = []
+        # nvtx.mark("driver_execute_model_async", domain=f've_{execute_model_req.virtual_engine}')
+        # nvtx.mark("driver_execute_model_async", domain=f've_n')
+        # coros1 = []
+        # print(len(execute_model_req))
+        # for req in execute_model_req:
+        #     coros1.append(self.driver_exec_method("execute_model", req))
+        #     # output = await self.driver_exec_method("execute_model",
+        #                                         #    req)
+        # print('before awati 1')
+        # await asyncio.gather(*coros1)
+        # print('after awati 1')
+        # # nvtx.mark("after first gather driver_execute_model_async", domain=f've_{execute_model_req.virtual_engine}')
+        # nvtx.mark("after first gather driver_execute_model_async", domain=f've_n')
+        # coros2 = []
+        # for req in execute_model_req:
+        #     for pp_rank, driver_worker in enumerate(self.tp_driver_workers,
+        #                                             start=1):
+        #         async with self.pp_locks[pp_rank]:
+        #             # print('before driver2 execute model')
+        #             # import pdb; pdb.set_trace()
+        #             # print('before awati 2')
+        #             output = await driver_worker.execute_method.remote(
+        #                 "execute_model", req)
+        #             # print('after awati 2')
+        #             # print('after driver2 execute model')
+        # #             coros2.append(driver_worker.execute_method.remote("execute_model", req))
+        # # print('before awati 2')
+        # # output = await asyncio.gather(*coros2)
+        # # print('after awati 2')
+        # # nvtx.mark("after second gather driver_execute_model_async", domain=f've_{execute_model_req.virtual_engine}')
+        # nvtx.mark("after second gather driver_execute_model_async", domain=f've_n')
+        # return []
+        coros=[]
         async with self.pp_locks[0]:
+            # print('before driver execute model')
             # output = await self.driver_exec_method("execute_model",
             #                                        execute_model_req)
+            # print('after driver execute model')
             coros.append(self.driver_exec_method("execute_model", execute_model_req))
         for pp_rank, driver_worker in enumerate(self.tp_driver_workers,
                                                 start=1):
             async with self.pp_locks[pp_rank]:
+                # print('before driver2 execute model')
+                # import pdb; pdb.set_trace()
                 # output = await driver_worker.execute_method.remote(
                 #     "execute_model", execute_model_req)
+                # print('after driver2 execute model')
                 coros.append(driver_worker.execute_method.remote("execute_model", execute_model_req))
         # print('before gaterh ')
         output = await asyncio.gather(*coros)
+        # self.launched.release()
+        nvtx.mark("after gather driver_execute_model_async", domain=f've_{execute_model_req.virtual_engine}')
+        # return coros
         # print('after gaterh ')
         #print(output[-1])
         # if execute_model_req or has_new_request:

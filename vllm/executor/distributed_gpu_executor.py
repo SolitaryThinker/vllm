@@ -157,7 +157,8 @@ class DistributedGPUExecutorAsync(DistributedGPUExecutor, ExecutorAsyncBase):
 
     async def execute_model_async(
             self,
-            execute_model_req: ExecuteModelRequest,
+            execute_model_req,
+            # execute_model_req: ExecuteModelRequest,
             has_new_request=False) -> List[SamplerOutput]:
         if self.parallel_worker_tasks is None:
             # Start model execution loop running in the parallel workers

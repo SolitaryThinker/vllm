@@ -26,6 +26,7 @@ from vllm.sequence import (MultiModalData, SamplerOutput, SequenceData,
                            SequenceGroupMetadata)
 from vllm.utils import (CudaMemoryProfiler, get_kv_cache_torch_dtype, is_hip,
                         is_pin_memory_available, make_tensor_with_pad)
+import nvtx
 
 logger = init_logger(__name__)
 
@@ -695,12 +696,15 @@ class ModelRunner:
         kv_caches: List[torch.Tensor],
         virtual_engine: int = 0,
     ) -> Optional[SamplerOutput]:
+        # print('execute model')
+        nvtx.mark('model runner', color='green', domain=f've_{virtual_engine}')
         (input_tokens, input_positions, attn_metadata, sampling_metadata,
          lora_requests, lora_mapping, multi_modal_input
          ) = self.prepare_input_tensors(seq_group_metadata_list)
 
         if self.lora_config:
             self.set_active_loras(lora_requests, lora_mapping)
+        nvtx.mark('model runner after input', color='green', domain=f've_{virtual_engine}')
 
         # Currently cuda graph is only supported by the decode phase.
         prefill_meta = attn_metadata.prefill_metadata
@@ -710,6 +714,7 @@ class ModelRunner:
             model_executable = self.graph_runners[virtual_engine][
                 graph_batch_size]
         else:
+            # print('executable ')
             model_executable = self.model
         execute_model_kwargs = {
             "input_ids": input_tokens,
@@ -717,26 +722,39 @@ class ModelRunner:
             "kv_caches": kv_caches,
             "attn_metadata": attn_metadata,
         }
+        # print('after executable ')
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
+        nvtx.mark('model runner before exec', color='green', domain=f've_{virtual_engine}')
         hidden_states = model_executable(**execute_model_kwargs)
+        nvtx.mark('model runner after exec', color='green', domain=f've_{virtual_engine}')
 
         # Compute the logits in the last pipeline stage.
         if is_pipeline_model_parallel_last_rank():
+            # print('execute model compute logit')
+            nvtx.mark('model runner before logit', color='green', domain=f've_{virtual_engine}')
             logits = self.model.compute_logits(hidden_states,
                                                sampling_metadata)
+            nvtx.mark('model runner after logit', color='green', domain=f've_{virtual_engine}')
+            # print('after execute model compute logit')
         else:
+            # print('return 1')
             return None
 
         # Only perform sampling in the first TP worker.
         if not self.is_driver_worker:
+            # print('return 2')
             return None
 
         # Sample the next token.
+        # print('execute model sample')
+        nvtx.mark('model runner before sample', color='green', domain=f've_{virtual_engine}')
         output = self.model.sample(
             logits=logits,
             sampling_metadata=sampling_metadata,
         )
+        nvtx.mark('model runner after sample', color='green', domain=f've_{virtual_engine}')
+        # print('after execute model sample')
 
         return output
 

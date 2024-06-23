@@ -214,21 +214,27 @@ class _AsyncLLMEngine(LLMEngine):
         
         while True:
             # print('req in progress')
-            await self.requests_in_progress.acquire()
+            # await self.requests_in_progress.acquire()
             # pdb.set_trace()
-            # await self.requests_in_progress_event.wait()
-            # self.requests_in_progress_event.clear()
+            await self.requests_in_progress_event.wait()
+            self.requests_in_progress_event.clear()
             # print('after req in progress')
-            for ve in range(2):
+            coros =  []
+            reqs= []
+            c =0
+            print('restart_ve:', self.restart_ve)
+            ve = 0
+            for _ in range(2):
                 if self.restart_ve[ve]:
+                # if True:
                     self.restart_ve[ve] = False
                     seq_group_metadata_list, scheduler_outputs = self.scheduler[ve].schedule()
 
                     # print('befpre metadata put')
                     # print('after metadata put')
                     # will block once we have enqueued 10
+                    await self.request_metadata_queue.put((seq_group_metadata_list, scheduler_outputs, ve))
                     if not scheduler_outputs.is_empty():
-                        await self.request_metadata_queue.put((seq_group_metadata_list, scheduler_outputs, ve))
                         # Execute the model.
                         execute_model_req = ExecuteModelRequest(
                             seq_group_metadata_list=seq_group_metadata_list,
@@ -239,10 +245,21 @@ class _AsyncLLMEngine(LLMEngine):
                             num_lookahead_slots=scheduler_outputs.num_lookahead_slots,
                             running_queue_size=scheduler_outputs.running_queue_size,
                         )
+                        # reqs.append(execute_model_req)
                         # await self.model_executor.scheduler_queue.put(execute_model_req)
                         # print(self.model_executor.scheduler_queue.qsize())
-                        _ = await self.model_executor.execute_model_async(
+                        r = await self.model_executor.execute_model_async(
                             execute_model_req)
+            self.model_executor.launched.release()
+            self.model_executor.launched.release()
+                        # c += 1
+            # if c < 0:
+            #     r = await self.model_executor.execute_model_async(
+            #         reqs)
+            # for i in range(c):  
+                # self.model_executor.launched.release()
+            #             coros.extend(r)
+            # await asyncio.gather(*coros)
                         #self.model_executor.new_request_sema.release()
                     # return not scheduler_outputs.is_empty()
 
@@ -264,14 +281,16 @@ class _AsyncLLMEngine(LLMEngine):
         # pdb.set_trace()
         seq_group_metadata_list, scheduler_outputs, sched_idx = await self.request_metadata_queue.get()
         if not scheduler_outputs.is_empty():
-            # print('waiting get')
+            # print('=======waiting get', sched_idx)
             # output = await self.model_executor.output_queue.get()
             # output = self.model_executor.workhers[-1].output_queue.get()
+            await self.model_executor.launched.acquire()
             output = self.model_executor.get_output()
             # print('===================')
             # print(output)
             # ray.get(output)
             output = await asyncio.gather(output)
+            # print('===after waiting get', sched_idx)
             # print(output)
             # print('got')
         else:
@@ -558,6 +577,7 @@ class AsyncLLMEngine:
 
     async def task_process_request(self) -> None:
         while True:
+            # print('task_process_request')
             # import pdb; pdb.set_trace()
             logger.debug("Waiting for new requests...")
             # if not any(self.engine.has_requests_in_progress):
@@ -593,14 +613,15 @@ class AsyncLLMEngine:
             if finished_requests:
                 await self._engine_abort(finished_requests)
             # if len(new_requests) > 0 and (not self.engine.has_requests_in_progress[0] and not self.engine.has_requests_in_progress[1]):
-            if len(new_requests) > 0:
+            if len(new_requests) > 0 and (self.engine.has_requests_in_progress[0] ==False or self.engine.has_requests_in_progress[1] == False):
+            # if len(new_requests) > 0:
                 # self.engine.requests_in_progress.release()
                 for i in range(2):
-                    # self.engine.restart_ve[i] = not self.engine.has_requests_in_progress[i]
-                    self.engine.restart_ve[i] = True
+                    self.engine.restart_ve[i] = not self.engine.has_requests_in_progress[i]
+                    # self.engine.restart_ve[i] = True
                     self.engine.has_requests_in_progress[i] = True
-                self.engine.requests_in_progress.release()
-                # self.engine.requests_in_progress_event.set()
+                # self.engine.requests_in_progress.release()
+                self.engine.requests_in_progress_event.set()
             # await asyncio.sleep(0.001)
                 #self.engine.requests_in_progress_event.set()
             # self.engine.requests_in_progress.release()
@@ -659,6 +680,7 @@ class AsyncLLMEngine:
 
     async def output_loop(self):
         while True:
+            # print('output_loop')
             request_outputs, sched_idx, more = await self.engine.output_async()
             # print('more', more)
             # import pdb; pdb.set_trace()
@@ -668,8 +690,8 @@ class AsyncLLMEngine:
                     request_output, verbose=self.log_requests)
             has_unfinished_request = len(request_outputs) > 0 or self.engine.scheduler[sched_idx].has_unfinished_seqs()    
             if has_unfinished_request:
-                self.engine.requests_in_progress.release()
-                # self.engine.requests_in_progress_event.set()
+                # self.engine.requests_in_progress.release()
+                self.engine.requests_in_progress_event.set()
                 self.engine.has_requests_in_progress[sched_idx] = True
                 self.engine.restart_ve[sched_idx] = True
             else:
