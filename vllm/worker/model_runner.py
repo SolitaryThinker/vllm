@@ -775,6 +775,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                              "export VLLM_ATTENTION_BACKEND=FLASHINFER.")
         
         print("final tensors:")
+        print("  input_tokens_tensor = {}".format(input_tokens_tensor))
         print("  context_lens_tensor = {}".format(context_lens_tensor))
         print("  seq_lens_tensor = {}".format(seq_lens_tensor))
         print("  query_lens_tensor = {}".format(query_lens_tensor))
