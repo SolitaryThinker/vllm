@@ -61,6 +61,9 @@ if TYPE_CHECKING:
 
 logger = init_logger(__name__)
 
+# TODO: Remove
+log_runner = True
+
 _PAD_SLOT_ID = -1
 LORA_WARMUP_RANK = 8
 _BATCH_SIZE_ALIGNMENT = 8
@@ -412,7 +415,9 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         if len(seq_group_metadata_list) == 0:
             return self._model_input_cls()
 
-        # print("sliding_window = {}".format(self.sliding_window))
+        if log_runner:
+            print("sliding_window = {}".format(self.sliding_window))
+
         if self.sliding_window is not None:
             sliding_window_blocks = (self.sliding_window + self.block_size -
                                      1) // self.block_size
@@ -424,16 +429,13 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
 
-            # print(
-            #     "Processing seq_group_id = {}, with seq_ids = {}, is_prompt = {}"
-            #     .format(seq_group_id, seq_ids, is_prompt))
+            if log_runner:
+                print(
+                    "Processing seq_group_id = {}, with seq_ids = {}, is_prompt = {}"
+                    .format(seq_group_id, seq_ids, is_prompt))
 
             for seq_id in seq_ids:
-                # print("  process seq_id = {}".format(seq_id))
-
                 computed_block_nums = seq_group_metadata.computed_block_nums
-                # print("  computed_block_nums = {}".format(computed_block_nums))
-
                 if (self.scheduler_config is not None
                         and self.scheduler_config.chunked_prefill_enabled
                         and not (computed_block_nums is None
@@ -451,16 +453,9 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                     # TODO(sang): Fix it.
                     context_len = seq_data.get_len() - 1
 
-                # print("  context_len = {}".format(context_len))
-                # print("  token_chunk_size = {}".format(
-                #     seq_group_metadata.token_chunk_size))
-                # print("  seq_data.get_len = {}".format(seq_data.get_len()))
-
                 seq_len = min(
                     seq_data.get_len(),
                     context_len + seq_group_metadata.token_chunk_size)
-
-                # print("  seq_len = {}".format(seq_len))
 
                 if is_prompt:
                     tokens = seq_data.get_token_ids()[context_len:seq_len]
@@ -537,20 +532,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                     # Prefill without chunked prefill or memory profiling.
                     block_table = []
 
-                # print("  block_table = {}".format(block_table))
-
                 block_tables.append(block_table)
-
-                # print("  cur_result:")
-                # print("    sliding_seq_len = {}".format(sliding_seq_len))
-                # print(
-                #     "    sliding_context_len = {}".format(sliding_context_len))
-                # print("    query_len = {}".format(sliding_seq_len -
-                #                                   sliding_context_len))
-                # print("    input_positions = {}".format(
-                #     list(range(context_len, seq_len))))
-                # print("    lora_id = {}".format(
-                #     seq_group_metadata.lora_int_id))
 
                 seq_lens.append(sliding_seq_len)
                 context_lens.append(sliding_context_len)
@@ -646,8 +628,6 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                     slot = block_number * self.block_size + block_offset
                     slot_mapping.append(slot)
 
-                # print("  slot_mapping = {}".format(slot_mapping))
-
                 # Prepare input tensors for flashinfer
                 if self.attn_backend.get_name() == "flashinfer":
                     seq_len = seq_data.get_len()
@@ -674,12 +654,6 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         max_prefill_seq_len = max(prefill_seq_lens, default=0)
         max_decode_seq_len = max(decode_seq_lens, default=0)
 
-        # print("Done processing sequences")
-        # print("  batch_size = {}".format(batch_size))
-        # print("  max_query_len = {}".format(max_query_len))
-        # print("  max_prefill_seq_len = {}".format(max_prefill_seq_len))
-        # print("  max_decode_seq_len = {}".format(max_decode_seq_len))
-
         # If cuda graph can be used, pad tensors accordingly.
         # See `capture_model` API for more details.
         # vLLM uses cuda graph only for decoding requests.
@@ -687,8 +661,14 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
             decode_only and not self.model_config.enforce_eager
             and batch_size <= _BATCH_SIZES_TO_CAPTURE[-1]
             and max_decode_seq_len <= self.max_seq_len_to_capture)
-        
-        # print("  use_captured_graph = {}".format(use_captured_graph))
+
+        if log_runner:
+            print("Done processing sequences")
+            print("  batch_size = {}".format(batch_size))
+            print("  max_query_len = {}".format(max_query_len))
+            print("  max_prefill_seq_len = {}".format(max_prefill_seq_len))
+            print("  max_decode_seq_len = {}".format(max_decode_seq_len))
+            print("  use_captured_graph = {}".format(use_captured_graph))
 
         if use_captured_graph:
             graph_batch_size = _get_graph_batch_size(batch_size)
@@ -774,6 +754,19 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                              " Set Flashinfer backend by "
                              "export VLLM_ATTENTION_BACKEND=FLASHINFER.")
         
+        if log_runner:
+            print("Final tensors:")
+            for name, tensor in [("input_tokens_tensor", input_tokens_tensor),
+                                 ("context_lens_tensor", context_lens_tensor),
+                                 ("seq_lens_tensor", seq_lens_tensor),
+                                 ("query_lens_tensor", query_lens_tensor),
+                                 ("input_positions_tensor",
+                                  input_positions_tensor),
+                                 ("slot_mapping_tensor", slot_mapping_tensor),
+                                 ("block_tables", block_tables)]:
+                print("  {}: shape = {} vals = {}".format(
+                    name, tensor.shape, tensor))
+
         if self.attn_backend.get_name() == "flashinfer":
             if len(paged_kv_indptr) > 0:
                 paged_kv_indices_tensor = torch.tensor(paged_kv_indices,
