@@ -431,7 +431,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
 
             if log_runner:
                 print(
-                    "Processing seq_group_id = {}, with seq_ids = {}, is_prompt = {}"
+                    " Add seq_group_id = {}, with seq_ids = {}, is_prompt = {}"
                     .format(seq_group_id, seq_ids, is_prompt))
 
             for seq_id in seq_ids:
