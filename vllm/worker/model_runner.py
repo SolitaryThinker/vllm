@@ -744,7 +744,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                              " Otherwise, the output might be wrong."
                              " Set Flashinfer backend by "
                              "export VLLM_ATTENTION_BACKEND=FLASHINFER.")
-        
+
         if log_runner:
             print("Final tensors:")
             for name, tensor in [("input_tokens_tensor", input_tokens_tensor),
