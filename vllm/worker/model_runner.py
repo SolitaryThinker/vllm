@@ -415,24 +415,15 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         if len(seq_group_metadata_list) == 0:
             return self._model_input_cls()
 
-        if log_runner:
-            print("sliding_window = {}".format(self.sliding_window))
-
         if self.sliding_window is not None:
             sliding_window_blocks = (self.sliding_window + self.block_size -
                                      1) // self.block_size
             block_aligned_sliding_window = \
                 sliding_window_blocks * self.block_size
 
-        seq_group_id = 0
         for seq_group_metadata in seq_group_metadata_list:
             seq_ids = list(seq_group_metadata.seq_data.keys())
             is_prompt = seq_group_metadata.is_prompt
-
-            if log_runner:
-                print(
-                    " Add seq_group_id = {}, with seq_ids = {}, is_prompt = {}"
-                    .format(seq_group_id, seq_ids, is_prompt))
 
             for seq_id in seq_ids:
                 computed_block_nums = seq_group_metadata.computed_block_nums
