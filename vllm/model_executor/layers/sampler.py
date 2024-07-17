@@ -173,7 +173,8 @@ class Sampler(nn.Module):
         method be encoded into the probability distribution.
         """
         # Modify greedy probs if include_gpu_probs_tensor is set.
-        return self.include_gpu_probs_tensor
+        # return self.include_gpu_probs_tensor
+        return False
 
 
 def _get_bin_counts_and_mask(

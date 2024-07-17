@@ -90,6 +90,8 @@ class FlashInferMetadata(AttentionMetadata):
     query_start_loc: Optional[torch.Tensor] = None
     block_tables: Optional[torch.Tensor] = None
 
+    seq_lens_tensor: Optional[torch.Tensor] = None
+
     # An example for paged_kv_indices, paged_kv_indptr:
     # request 1, page indices [0, 5, 8]
     # request 2, page indices [1, 6, 7]
@@ -138,6 +140,7 @@ class FlashInferMetadata(AttentionMetadata):
             assert self.paged_kv_indices is not None
             assert self.paged_kv_indptr is not None
             assert self.paged_kv_last_page_len is not None
+            self.seq_lens_tensor = self.seq_lens_tensor.to(self.device)
             self.paged_kv_indices = self.paged_kv_indices.to(self.device)
             self.paged_kv_indptr = self.paged_kv_indptr.to(self.device)
             self.paged_kv_last_page_len = self.paged_kv_last_page_len.to(
@@ -153,6 +156,7 @@ class FlashInferMetadata(AttentionMetadata):
                 assert self.paged_kv_indices is not None
                 assert self.paged_kv_indptr is not None
                 assert self.paged_kv_last_page_len is not None
+                self.seq_lens_tensor = self.seq_lens_tensor.to(self.device)
                 self.paged_kv_indices = self.paged_kv_indices.to(self.device)
                 self.paged_kv_indptr = self.paged_kv_indptr.to(self.device)
                 self.paged_kv_last_page_len = self.paged_kv_last_page_len.to(
@@ -412,6 +416,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             self.runner.kv_cache_dtype, self.runner.model_config.dtype)
         return FlashInferMetadata(
             num_prefills=self.num_prefills,
+            seq_lens_tensor=seq_lens_tensor,
             slot_mapping=slot_mapping_tensor,
             num_prefill_tokens=self.num_prefill_tokens,
             num_decode_tokens=num_decode_tokens,
