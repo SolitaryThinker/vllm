@@ -91,6 +91,7 @@ class FlashInferMetadata(AttentionMetadata):
     block_tables: Optional[torch.Tensor] = None
 
     seq_lens_tensor: Optional[torch.Tensor] = None
+    block_table_bound: Optional[torch.Tensor] = None
 
     # An example for paged_kv_indices, paged_kv_indptr:
     # request 1, page indices [0, 5, 8]
@@ -145,6 +146,8 @@ class FlashInferMetadata(AttentionMetadata):
             self.paged_kv_indptr = self.paged_kv_indptr.to(self.device)
             self.paged_kv_last_page_len = self.paged_kv_last_page_len.to(
                 self.device)
+            self.block_table_bound = self.block_table_bound.to(self.device)
+            self.seq_lens_tensor = self.seq_lens_tensor.to(self.device)
             self.prefill_wrapper.end_forward()
             self.prefill_wrapper.begin_forward(
                 self.query_start_loc, self.paged_kv_indptr,
@@ -161,6 +164,8 @@ class FlashInferMetadata(AttentionMetadata):
                 self.paged_kv_indptr = self.paged_kv_indptr.to(self.device)
                 self.paged_kv_last_page_len = self.paged_kv_last_page_len.to(
                     self.device)
+                self.block_table_bound = self.block_table_bound.to(self.device)
+                self.seq_lens_tensor = self.seq_lens_tensor.to(self.device)
 
             assert self.decode_wrapper is not None
             self.decode_wrapper.end_forward()
