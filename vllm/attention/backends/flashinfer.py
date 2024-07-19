@@ -246,6 +246,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         self.paged_kv_indptr: List[int] = [0]
         # paged_kv_last_page_len is the length of the last page of each request
         self.paged_kv_last_page_len: List[int] = []
+        self.total_blocks = 0
 
     def add_seq_group(self, seq_group_metadata: SequenceGroupMetadata,
                       token_lens: List[int], seq_lens: List[int],
@@ -317,6 +318,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                                 if seq_len % self.block_size != 0 \
                                 else seq_len // self.block_size
             block_table = block_tables[seq_id]
+            self.total_blocks += len(block_table)
             self.paged_kv_indices.extend(block_table[:block_table_bound])
             self.paged_kv_indptr.append(self.paged_kv_indptr[-1] +
                                         block_table_bound)
@@ -390,6 +392,10 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                                   "attn_logit_softcapping", None)
 
         if len(self.paged_kv_indptr) > 0:
+            # extend to the maximum number of blocks as returned by the
+            # scheduler
+            self.paged_kv_indices.extend([0] *
+                        (self.total_blocks - len(self.paged_kv_indices)))
             paged_kv_indices_tensor = torch.tensor(self.paged_kv_indices,
                                                    device="cpu",
                                                    dtype=torch.int)
@@ -398,10 +404,13 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                                                   dtype=torch.int)
             paged_kv_last_page_len_tensor = torch.tensor(
                 self.paged_kv_last_page_len, device="cpu", dtype=torch.int)
+            block_table_bound_tensor = torch.zeros(
+                len(self.paged_kv_indptr) - 1, device="cpu", dtype=torch.int)
         else:
             paged_kv_indices_tensor = None
             paged_kv_indptr_tensor = None
             paged_kv_last_page_len_tensor = None
+            block_table_bound_tensor = None
 
         kv_cache_dtype = get_kv_cache_torch_dtype(runner.kv_cache_dtype,
                                                   runner.model_config.dtype)
@@ -416,6 +425,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             paged_kv_indptr=paged_kv_indptr_tensor,
             paged_kv_indices=paged_kv_indices_tensor,
             paged_kv_last_page_len=paged_kv_last_page_len_tensor,
+            block_table_bound=block_table_bound_tensor,
             num_qo_heads=runner.model_config.get_num_attention_heads(
                 runner.parallel_config),
             num_kv_heads=runner.model_config.get_num_kv_heads(

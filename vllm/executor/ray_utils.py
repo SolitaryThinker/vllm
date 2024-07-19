@@ -10,6 +10,8 @@ logger = init_logger(__name__)
 
 try:
     import ray
+    from ray.runtime_env import RuntimeEnv
+
 
     class RayWorkerWrapper(WorkerWrapperBase):
         """Ray wrapper for vllm.worker.Worker, allowing Worker to be
@@ -87,7 +89,8 @@ def initialize_ray_cluster(
                  ignore_reinit_error=True,
                  num_gpus=parallel_config.world_size)
     else:
-        ray.init(address=ray_address, ignore_reinit_error=True)
+        ray.init(address=ray_address, ignore_reinit_error=True,
+                runtime_env ={"env_vars":{"VLLM_ATTENTION_BACKEND":"FLASHINFER"}})
 
     if parallel_config.placement_group:
         # Placement group is already set.
