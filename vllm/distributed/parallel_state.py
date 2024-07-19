@@ -655,6 +655,40 @@ class GroupCoordinator:
                 _update_nested_dict(tensor_dict, key, value)
         return tensor_dict
 
+    def send_next_rank(
+        self,
+        tensors: List[torch.Tensor], 
+    ) -> None:
+        """Send the tensors to the next pipeline model parallel rank."""
+        group = self.device_group
+        combined_tensor = torch.cat(tensors, dim=0)
+        torch.cat(tensors, dim=0)
+        dst = (self.rank_in_group + 1) % self.world_size
+        assert dst < self.world_size, f"Invalid dst rank ({dst})"
+        torch.distributed.send(combined_tensor,
+                               dst=self.ranks[dst],
+                               group=group)
+    
+    def recv_prev_rank(
+        self,
+        num_tensors: int,
+        sizes: torch.Size, 
+        dtype: torch.dtype,
+        device: torch.device
+    ) -> List[torch.Tensor]:
+        """Receive tensors from the previous pipeline model parallel rank."""
+        group = self.device_group
+        src = (self.rank_in_group - 1) % self.world_size
+        assert src < self.world_size, f"Invalid src rank ({src})"
+        sizes = list(sizes)
+        combined_tensor = torch.empty([sizes[0] * num_tensors] + sizes[1:],
+                                    dtype=dtype,
+                                    device=device)
+        torch.distributed.recv(combined_tensor,
+                               src=self.ranks[src],
+                               group=group)
+        return torch.chunk(combined_tensor, num_tensors, dim=0)
+
     def barrier(self):
         """Barrier synchronization among the group.
         NOTE: don't use `device_group` here! `barrier` in NCCL is

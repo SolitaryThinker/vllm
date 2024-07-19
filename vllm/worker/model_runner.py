@@ -919,6 +919,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                 multi_modal_data=dummy_multi_modal_data,
             )
             seqs.append(seq)
+        logger.info('profile run')
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)

@@ -19,6 +19,7 @@ from vllm import _custom_ops as ops
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, MultiModalConfig, ParallelConfig,
                          SchedulerConfig, PromptAdapterConfig)
+from vllm.distributed import get_pp_group
 from vllm.logger import init_logger
 from vllm.sequence import (Logprob, CompletionSequenceGroupOutput, IntermediateTensors, 
                            SamplerOutput, SequenceGroupMetadata, SequenceOutput)
@@ -165,7 +166,9 @@ class MultiStepModelRunner(ModelRunner):
 
         if self.lora_config:
             raise ValueError("LoRA is not supported for MultiStepModelRunner.")
-        self.model.sampler.include_gpu_probs_tensor = True
+        
+        if get_pp_group().is_last_rank:
+            self.model.sampler.include_gpu_probs_tensor = True
 
 
         virtual_engine = model_input.virtual_engine
@@ -177,9 +180,13 @@ class MultiStepModelRunner(ModelRunner):
                 # model_input.sampling_metadata.skip_sampler_cpu_output = False
                 model_input.sampling_metadata.skip_sampler_cpu_output = True
             else:
-                model_input.sampling_metadata.skip_sampler_cpu_output = False
+                if get_pp_group().is_last_rank:
+                    model_input.sampling_metadata.skip_sampler_cpu_output = False
+                else:
+                    model_input.sampling_metadata.skip_sampler_cpu_output = True
 
             # print('skip_sampler_cpu_output', model_input.sampling_metadata.skip_sampler_cpu_output)
+            # print('=====self.attn_backend.get_name()', self.attn_backend.get_name())
             if self.attn_backend.get_name() == "flashinfer":
                 assert model_input.attn_metadata is not None
                 assert model_input.input_tokens is not None
@@ -243,32 +250,64 @@ class MultiStepModelRunner(ModelRunner):
             # print(f'\t\t\t------ON step {step} compute logits')
 
             # Compute the logits.
-            logits = self.model.compute_logits(hidden_states,
-                                               model_input.sampling_metadata)
-            # print(f'\t\t\t------ON step {step} sample')
+            if get_pp_group().is_last_rank:
+                logits = self.model.compute_logits(hidden_states,
+                                                model_input.sampling_metadata)
+                # print(f'\t\t\t------ON step {step} sample')
 
-            # Sample the next token.
-            outputs.append(
-                self.model.sample(
-                    logits=logits,
-                    sampling_metadata=model_input.sampling_metadata,
-                ))
+                if self.is_driver_worker:
+                    # Sample the next token.
+                    outputs.append(
+                        self.model.sample(
+                            logits=logits,
+                            sampling_metadata=model_input.sampling_metadata,
+                        ))
+                if self.return_hidden_states:
+                    raise ValueError("return_hidden_states is not supported for MultiStepModelRunner.")
+
+            # TODO(will) take a close look at this logic for TP
+            if not self.is_driver_worker:
+                return []
 
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
                 assert num_steps > 1
                 # print(f'\t\t\t------ON step {step} update_model_input')
-                model_input = self._advance_step(model_input, outputs[-1])
+                if get_pp_group().is_last_rank:
+                    # broadcast the sampled token to all pp stages
+                    # print('broadcasting from last rank')
+                    get_pp_group().broadcast_tensor_dict(
+                        {"sampled_token_ids":outputs[-1].sampled_token_ids},
+                        src=get_pp_group().last_rank)
+                    # print('after broadcasting from last rank')
+
+                    model_input = self._advance_step(model_input, outputs[-1])
+                else:
+                    # get next token from broadcast
+                    # print('before  recv broadcasting from non last rank')
+                    output_dict = get_pp_group().broadcast_tensor_dict(
+                        src=get_pp_group().last_rank)
+                    # print('after   recv broadcasting from non last rank')
+                    out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
+                    model_input = self._advance_step(model_input, out)
                 # model_input = self.update_model_input(model_input, outputs[-1])
                 # model_input = self._advance_step_gpu(model_input, outputs[-1])
             else:
                 # if model_input.sampling_metadata.skip_sampler_cpu_output:
                 # print('final step, building outputs')
                 # pass
-                self.pythonize_outputs(model_input, outputs[:-1])
+                if get_pp_group().is_last_rank:
+                    self.pythonize_outputs(model_input, outputs[:-1])
                 
+        if not get_pp_group().is_last_rank:
+            return hidden_states
+
+        if not self.is_driver_worker:
+            return []
 
         return outputs
+
+
     def pythonize_outputs(self, 
     model_input: ModelInputForGPUWithSamplingMetadata,
                           outputs: List[SamplerOutput]) -> List[SamplerOutput]:

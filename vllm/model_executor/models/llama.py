@@ -313,9 +313,20 @@ class LlamaModel(nn.Module):
                 hidden_states = self.get_input_embeddings(input_ids)
             residual = None
         else:
-            assert intermediate_tensors is not None
-            hidden_states = intermediate_tensors["hidden_states"]
-            residual = intermediate_tensors["residual"]
+            if inputs_embeds is not None:
+                sizes = list(inputs_embeds.size())
+            else:
+                sizes = list(input_ids.size()) + [self.config.hidden_size]
+
+            
+            # print('before recv_prev_rank')
+            hidden_states, residual = get_pp_group().recv_prev_rank(
+                2, torch.Size(sizes), 
+                # self.layers[0].mlp.gate_up_proj.weight.dtype,
+                torch.bfloat16,
+                'cuda')
+            # print('after recv_prev_rank')
+                
 
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
@@ -328,10 +339,14 @@ class LlamaModel(nn.Module):
             )
 
         if not get_pp_group().is_last_rank:
-            return IntermediateTensors({
-                "hidden_states": hidden_states,
-                "residual": residual
-            })
+            # return IntermediateTensors({
+            #     "hidden_states": hidden_states,
+            #     "residual": residual
+            # })
+            # print('before send_next_rank')
+            get_pp_group().send_next_rank([hidden_states, residual])   
+            # print('after send_next_rank')
+            return hidden_states
 
         hidden_states, _ = self.norm(hidden_states, residual)
         return hidden_states
