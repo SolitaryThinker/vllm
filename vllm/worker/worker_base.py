@@ -219,6 +219,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     ) -> Optional[List[SamplerOutput]]:
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
+        print('execute_model in LocalOrDistributedWorkerBase')
         if self.is_driver_worker:
             if execute_model_req is None:
                 if self.do_metadata_broadcast:
@@ -258,6 +259,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 self.model_runner.
                 make_model_input_from_broadcasted_tensor_dict(broadcast_data))
 
+        print('about to run modell runner')
         self.execute_worker(worker_input)
 
         # If there is no input, we don't need to execute the model.

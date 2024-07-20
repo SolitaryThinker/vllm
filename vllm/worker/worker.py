@@ -89,6 +89,7 @@ class Worker(LocalOrDistributedWorkerBase):
         elif self.model_config.embedding_mode:
             ModelRunnerClass = EmbeddingModelRunner
         elif self.scheduler_config.is_multi_step:
+            print('--------------MultiStepModelRunner----------------')
             ModelRunnerClass = MultiStepModelRunner
         self.model_runner: GPUModelRunnerBase = ModelRunnerClass(
             model_config,
