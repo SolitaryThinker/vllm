@@ -161,9 +161,6 @@ class MultiStepModelRunner(ModelRunner):
         # we need to figure out the best way to support TP > 1 in this
         # case, because we will at least need to broadcast the sampled
         # tokens to all workers.
-        print('------ON execute_model------ in multi_step_model_runner.py')
-        # if not self.is_driver_worker:
-        #     raise ValueError("TP1DraftModelRunner only supports TP=1.")
 
         if self.lora_config:
             raise ValueError("LoRA is not supported for MultiStepModelRunner.")
@@ -174,9 +171,9 @@ class MultiStepModelRunner(ModelRunner):
 
         virtual_engine = model_input.virtual_engine
         outputs: List[SamplerOutput] = []
-        print(f'------doing {num_steps} steps------')
+        # print(f'------doing {num_steps} steps------')
         for step in range(num_steps):
-            print(f'\t\t\t------ON step {step} -----')
+            # print(f'\t\t\t------ON step {step} -----')
             if step != num_steps - 1:
                 # model_input.sampling_metadata.skip_sampler_cpu_output = False
                 model_input.sampling_metadata.skip_sampler_cpu_output = True
@@ -238,7 +235,7 @@ class MultiStepModelRunner(ModelRunner):
                 model_executable = self.model
 
             multi_modal_kwargs = model_input.multi_modal_kwargs or {}
-            print(f'\t\t\t------ON step {step} model executable')
+            # print(f'\t\t\t------ON step {step} model executable')
             # print('--')
             hidden_states = model_executable(
                 input_ids=model_input.input_tokens,
@@ -248,13 +245,13 @@ class MultiStepModelRunner(ModelRunner):
                 intermediate_tensors=intermediate_tensors,
                 **multi_modal_kwargs,
             )
-            print(f'\t\t\t------ON step {step} compute logits')
+            # print(f'\t\t\t------ON step {step} compute logits')
 
             # Compute the logits.
             if get_pp_group().is_last_rank:
                 logits = self.model.compute_logits(hidden_states,
                                                 model_input.sampling_metadata)
-                print(f'\t\t\t------ON step {step} sample')
+                # print(f'\t\t\t------ON step {step} sample')
 
                 if self.is_driver_worker:
                     # Sample the next token.
@@ -269,7 +266,7 @@ class MultiStepModelRunner(ModelRunner):
             # TODO(will) take a close look at this logic for TP
             # if not self.is_driver_worker:
             #     return []
-            # get_tp_group().barrier()    
+            get_tp_group().barrier()    
 
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
@@ -278,36 +275,41 @@ class MultiStepModelRunner(ModelRunner):
                 if get_pp_group().is_last_rank:
                     # broadcast the sampled token to all pp stages
                     if self.is_driver_worker:
-                        print('broadcasting from last rank driver')
-                        get_pp_group().broadcast_tensor_dict(
+                        # print('broadcasting from last rank driver')
+                        pp_group = get_pp_group()
+                        pp_group.broadcast_tensor_dict(
                             {"sampled_token_ids":outputs[-1].sampled_token_ids},
-                            src=get_pp_group().last_rank)
+                            src=pp_group.world_size - 1)
+
+                            #src=get_pp_group().last_rank)
+                        pp_group.barrier()
                         get_tp_group().broadcast_tensor_dict(
-                            {"sampled_token_ids":outputs[-1].sampled_token_ids},
-                            src=get_tp_group().first_rank)
+                            {"sampled_token_ids":outputs[-1].sampled_token_ids})
+                            # src=get_tp_group().first_rank)
                         out = outputs[-1]
-                        print('done broadcasting from last rank driver')
+                        # print('done broadcasting from last rank driver')
                     else:
-                        print('broadcasting from last rank worker')
-                        output_dict = get_tp_group().broadcast_tensor_dict(
-                            src=get_tp_group().first_rank)
+                        # print('broadcasting from last rank worker')
+                        output_dict = get_tp_group().broadcast_tensor_dict()
+                            # src=get_tp_group().first_rank)
                         out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
-                        print('done broadcasting from last rank worker')
+                        # print('done broadcasting from last rank worker')
 
                     model_input = self._advance_step(model_input, out)
                 else:
                     # get next token from broadcast
-                    print('before  recv broadcasting from non last rank')
+                    # print('before  recv broadcasting from non last rank')
                     if self.is_driver_worker:
-                        output_dict = get_pp_group().broadcast_tensor_dict(
-                            src=get_pp_group().last_rank)
+                        pp_group = get_pp_group()
+                        output_dict = pp_group.broadcast_tensor_dict(
+                            src=pp_group.world_size - 1)
+                            # src=get_pp_group().last_rank)
+                        get_pp_group().barrier()
                         get_tp_group().broadcast_tensor_dict(
-                            {"sampled_token_ids":output_dict["sampled_token_ids"]},
-                            src=get_tp_group().first_rank)
+                            {"sampled_token_ids":output_dict["sampled_token_ids"]})
                     else:
-                        output_dict = get_tp_group().broadcast_tensor_dict(
-                            src=get_tp_group().first_rank)
-                    print('after   recv broadcasting from non last rank')
+                        output_dict = get_tp_group().broadcast_tensor_dict()
+                    # print('after   recv broadcasting from non last rank')
                     out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
                     model_input = self._advance_step(model_input, out)
                 # model_input = self.update_model_input(model_input, outputs[-1])
@@ -319,6 +321,7 @@ class MultiStepModelRunner(ModelRunner):
                 if get_pp_group().is_last_rank:
                     if self.is_driver_worker:
                         self.pythonize_outputs(model_input, outputs[:-1])
+            get_tp_group().barrier()    
                 
         if not get_pp_group().is_last_rank:
             return hidden_states

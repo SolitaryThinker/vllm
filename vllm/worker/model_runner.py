@@ -919,7 +919,6 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                 multi_modal_data=dummy_multi_modal_data,
             )
             seqs.append(seq)
-        logger.info('profile run')
 
         # Run the model with the dummy inputs.
         num_layers = self.model_config.get_num_layers(self.parallel_config)
@@ -928,18 +927,12 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
         model_input = self.prepare_model_input(
             seqs, finished_requests_ids=finished_requests_ids)
         intermediate_tensors = None
-        # if not get_pp_group().is_first_rank:
-        #     intermediate_tensors = self.model.make_empty_intermediate_tensors(
-        #         batch_size=batch_size,
-        #         dtype=self.model_config.dtype,
-        #         device=self.device)
-        logger.info('profile run 2')
-        # print('model_input', model_input)
-        # print('kv_caches', kv_caches)
-        # print('intermediate_tensors', intermediate_tensors)
-        # import pdb; pdb.set_trace()
+        if not get_pp_group().is_first_rank:
+            intermediate_tensors = self.model.make_empty_intermediate_tensors(
+                batch_size=batch_size,
+                dtype=self.model_config.dtype,
+                device=self.device)
         self.execute_model(model_input, kv_caches, intermediate_tensors)
-        logger.info('profile run 3')
         torch.cuda.synchronize()
         return
 
@@ -1291,7 +1284,6 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         intermediate_tensors: Optional[IntermediateTensors] = None,
         num_steps: int = 1,
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
-        print('wtffffff')
         if num_steps > 1:
             raise ValueError("num_steps > 1 is not supported in ModelRunner")
 
