@@ -123,6 +123,21 @@ async def show_version():
     ver = {"version": VLLM_VERSION}
     return JSONResponse(content=ver)
 
+@router.post("/start_profile")
+async def start_profile():
+    engine.start_profile()
+    print('Profile started')
+    return JSONResponse(content={"message": "Profile started"})
+
+
+@router.post("/stop_profile")
+async def stop_profile():
+    engine.stop_profile()
+    print('Profile stopped')
+    return JSONResponse(content={"message": "Profile stopped"})
+
+
+
 
 @router.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest,
