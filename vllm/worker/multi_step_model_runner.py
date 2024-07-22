@@ -25,6 +25,7 @@ from vllm.sequence import (Logprob, CompletionSequenceGroupOutput, IntermediateT
                            SamplerOutput, SequenceGroupMetadata, SequenceOutput)
 from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
                                       ModelRunner)
+from vllm.attention.backends.flashinfer import NUM_FLASHINFER_WORKSPACE_BUFFERS
 
 logger = init_logger(__name__)
 
@@ -92,8 +93,10 @@ class MultiStepModelRunner(ModelRunner):
         self.cached_seq_group_metadata_list: Optional[
             List[SequenceGroupMetadata]] = None
 
-        # self.cached_block_tables: Optional[torch.Tensor] = None
-        # self.cached_seq_lens: Optional[torch.Tensor] = None
+        self.flashinfer_decode_workspace_buffers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
+        self.flashinfer_decode_wrappers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
+        self.flashinfer_prefill_workspace_buffers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
+        self.flashinfer_prefill_wrappers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
 
     def prepare_model_input(
         self,
@@ -182,30 +185,32 @@ class MultiStepModelRunner(ModelRunner):
                     model_input.sampling_metadata.skip_sampler_cpu_output = False
                 else:
                     model_input.sampling_metadata.skip_sampler_cpu_output = True
+            
+            idx = step % NUM_FLASHINFER_WORKSPACE_BUFFERS
 
             # print('skip_sampler_cpu_output', model_input.sampling_metadata.skip_sampler_cpu_output)
             # print('=====self.attn_backend.get_name()', self.attn_backend.get_name())
             if self.attn_backend.get_name() == "flashinfer":
                 assert model_input.attn_metadata is not None
                 assert model_input.input_tokens is not None
-                if self.flashinfer_decode_workspace_buffer is None:
-                    self.flashinfer_decode_workspace_buffer = torch.empty(
+                if self.flashinfer_decode_workspace_buffers[idx] is None:
+                    self.flashinfer_decode_workspace_buffers[idx] = torch.empty(
                         FLASHINFER_WORKSPACE_BUFFER_SIZE,
                         dtype=torch.uint8,
                         device=self.device)
-                    self.flashinfer_decode_wrapper = \
+                    self.flashinfer_decode_wrappers[idx] = \
                         BatchDecodeWithPagedKVCacheWrapper(
-                        self.flashinfer_decode_workspace_buffer, "NHD")
-                    self.flashinfer_prefill_workspace_buffer = torch.empty(
+                        self.flashinfer_decode_workspace_buffers[idx], "NHD")
+                    self.flashinfer_prefill_workspace_buffers[idx] = torch.empty(
                         FLASHINFER_WORKSPACE_BUFFER_SIZE,
                         dtype=torch.uint8,
                         device=self.device)
-                    self.flashinfer_prefill_wrapper = \
+                    self.flashinfer_prefill_wrappers[idx] = \
                         BatchPrefillWithPagedKVCacheWrapper(
-                        self.flashinfer_prefill_workspace_buffer, "NHD")
+                        self.flashinfer_prefill_workspace_buffers[idx], "NHD")
 
                 model_input.attn_metadata.prefill_wrapper = \
-                    self.flashinfer_prefill_wrapper
+                    self.flashinfer_prefill_wrappers[idx]
                 if model_input.attn_metadata.use_cuda_graph:
                     assert False
                     batch_size = model_input.input_tokens.shape[0]
@@ -214,10 +219,10 @@ class MultiStepModelRunner(ModelRunner):
                         virtual_engine][batch_size].flashinfer_decode_wrapper
                 else:
                     model_input.attn_metadata.decode_wrapper = \
-                        self.flashinfer_decode_wrapper
+                        self.flashinfer_decode_wrappers[idx]
 
                 # if step == 0:
-                model_input.attn_metadata.begin_forward()
+                model_input.attn_metadata.begin_forward(idx)
                 # if step != num_steps - 1:
                 # else:
 
@@ -295,7 +300,7 @@ class MultiStepModelRunner(ModelRunner):
                         out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
                         # print('done broadcasting from last rank worker')
 
-                    model_input = self._advance_step(model_input, out)
+                    # model_input = self._advance_step(model_input, out)
                 else:
                     # get next token from broadcast
                     # print('before  recv broadcasting from non last rank')
@@ -311,9 +316,9 @@ class MultiStepModelRunner(ModelRunner):
                         output_dict = get_tp_group().broadcast_tensor_dict()
                     # print('after   recv broadcasting from non last rank')
                     out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
-                    model_input = self._advance_step(model_input, out)
+                    # model_input = self._advance_step(model_input, out)
                 # model_input = self.update_model_input(model_input, outputs[-1])
-                # model_input = self._advance_step_gpu(model_input, outputs[-1])
+                model_input = self._advance_step_gpu(model_input, out, idx)
             else:
                 # if model_input.sampling_metadata.skip_sampler_cpu_output:
                 # print('final step, building outputs')
@@ -482,3 +487,79 @@ class MultiStepModelRunner(ModelRunner):
             input_positions=model_input.input_positions,
             attn_metadata=next_attn_metadata,
         )
+
+    def _advance_step_gpu(
+        self,
+        model_input: ModelInputForGPUWithSamplingMetadata,
+        last_output: SamplerOutput,
+        idx: int,
+    ) -> ModelInputForGPUWithSamplingMetadata:
+        """Advance the model input for the next step."""
+        # Append the output token to the sequence data.
+        assert self.cached_seq_group_metadata_list is not None
+        for seq_group_metadata, sequence_group_outputs in zip(
+                self.cached_seq_group_metadata_list, last_output.outputs):
+            seq_group_metadata.is_prompt = False
+
+            for seq_output in sequence_group_outputs.samples:
+                seq = seq_group_metadata.seq_data[seq_output.parent_seq_id]
+
+                token_id = seq_output.output_token
+                token_logprob = seq_output.logprobs[token_id]
+
+                seq.append_token_id(token_id, token_logprob.logprob)
+                seq.update_num_computed_tokens(1)
+
+        sampled_tokens = last_output.sampled_token_ids.flatten()
+        model_input.input_tokens[:] = sampled_tokens
+
+        num_seqs = len(model_input.seq_lens)
+        num_queries = len(model_input.query_lens)
+        assert num_seqs == num_queries
+        attn_metadata = model_input.attn_metadata
+        # Update GPU tensors
+        attn_metadata.seq_start_loc = None
+        attn_metadata.query_start_loc = None
+        ops.advance_step_flashinfer(
+            num_seqs=num_seqs,
+            num_queries=num_queries,
+            block_size=self.block_size,
+            input_tokens=model_input.input_tokens,
+            sampled_token_ids=model_input.input_tokens,
+            input_positions=model_input.input_positions,
+            seq_lens=attn_metadata.seq_lens_tensor,
+            slot_mapping=attn_metadata.slot_mapping,
+            block_tables=attn_metadata.block_tables,
+            # paged_kv_indices=attn_metadata.cached_paged_kv_indices,
+            paged_kv_indices=attn_metadata.paged_kv_indices,
+            paged_kv_indptr=attn_metadata.paged_kv_indptr,
+            paged_kv_last_page_len=attn_metadata.paged_kv_last_page_len,
+            block_table_bound=attn_metadata.block_table_bound)
+
+        seq_lens = list(map(lambda x: x + 1, model_input.seq_lens))
+        bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
+
+        # we update next step's attn_metadata
+        model_input.attn_metadata.paged_kv_indptr_cpu[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
+            torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
+
+        new_model_input = self._model_input_cls(
+            seq_lens=seq_lens,
+            input_tokens=model_input.input_tokens,
+            input_positions=model_input.input_positions,
+            attn_metadata=attn_metadata,
+            query_lens=model_input.query_lens,
+            lora_mapping=model_input.lora_mapping,
+            lora_requests=model_input.lora_requests,
+            multi_modal_kwargs=model_input.multi_modal_kwargs,
+            sampling_metadata=model_input.sampling_metadata,
+            is_prompt=False,
+        )
+
+        # Ensure we skip CPU samples
+        # assert new_model_input.sampling_metadata.skip_sampler_cpu_output is True
+        # We can reuse sampling tensors since every decode iteration is the same
+        new_model_input.sampling_metadata.reuse_sampling_tensors = True
+
+        return new_model_input
