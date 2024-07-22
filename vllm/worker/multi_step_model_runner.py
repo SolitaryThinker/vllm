@@ -43,22 +43,24 @@ class ModelOutput:
     sampler_output: SamplerOutput
     sampler_output_ready_event: torch.cuda.Event
     pythonized_sampler_output: Optional[SamplerOutput] = None
+    pythonized: bool = False
 
     def pythonize(self, input_metadata: ModelInputForGPUWithSamplingMetadata,
                   copy_stream: torch.cuda.Stream) -> SamplerOutput:
         """Pythonize the output. Blocking."""
-        if self.pythonized_sampler_output is None:
+        if not self.pythonized:
             self.pythonized_sampler_output = (
                 self._pythonize_sampler_output_wait_on_event(
                     input_metadata, copy_stream))
+            self.pythonized = True
         return self.pythonized_sampler_output
 
     def maybe_pythonize(
             self, input_metadata: ModelInputForGPUWithSamplingMetadata,
             copy_stream: torch.cuda.Stream) -> Optional[SamplerOutput]:
         """Pythonize the output if ready, else return None. Non-blocking."""
-        if self.pythonized_sampler_output is None:
-            self.pythonized_sampler_output = (
+        if not self.pythonized:
+            self.pythonized_sampler_output, self.pythonized = (
                 self._pythonize_sampler_output_if_event_ready(
                     input_metadata, copy_stream))
         return self.pythonized_sampler_output
@@ -68,17 +70,15 @@ class ModelOutput:
             copy_stream: torch.cuda.Stream) -> SamplerOutput:
         self.sampler_output_ready_event.synchronize()
         with torch.cuda.stream(copy_stream):
-            return pythonize_sampler_output(self.sampler_output,
-                                            input_metadata)
+            return pythonize_sampler_output(input_metadata, self.sampler_output)
 
     def _pythonize_sampler_output_if_event_ready(
             self, input_metadata: ModelInputForGPUWithSamplingMetadata,
-            copy_stream: torch.cuda.Stream) -> Optional[SamplerOutput]:
+            copy_stream: torch.cuda.Stream) -> Tuple[Optional[SamplerOutput], bool]:
         if self.sampler_output_ready_event.query():
             with torch.cuda.stream(copy_stream):
-                return pythonize_sampler_output(self.sampler_output,
-                                                input_metadata)
-        return None
+                return pythonize_sampler_output(input_metadata, self.sampler_output), True
+        return None, False
 
 
 # TODO(will) use this class for T1DraftModelRunner
@@ -144,10 +144,14 @@ class MultiStepModelRunner(ModelRunner):
         self.cached_seq_group_metadata_list: Optional[
             List[SequenceGroupMetadata]] = None
 
+        self._copy_stream = torch.cuda.Stream()
+
         self.flashinfer_decode_workspace_buffers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
         self.flashinfer_decode_wrappers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
         self.flashinfer_prefill_workspace_buffers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
         self.flashinfer_prefill_wrappers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
+
+        self.step_cuda_events = [torch.cuda.Event()] * NUM_FLASHINFER_WORKSPACE_BUFFERS
 
     def prepare_model_input(
         self,
@@ -224,16 +228,18 @@ class MultiStepModelRunner(ModelRunner):
 
 
         virtual_engine = model_input.virtual_engine
-        outputs: List[SamplerOutput] = []
+        model_outputs: List[ModelOutput] = []
+        current_stream = torch.cuda.current_stream()
+
         # print(f'------doing {num_steps} steps------')
         for step in range(num_steps):
             # print(f'\t\t\t------ON step {step} -----')
             if step != num_steps - 1:
-                # model_input.sampling_metadata.skip_sampler_cpu_output = False
                 model_input.sampling_metadata.skip_sampler_cpu_output = True
             else:
                 if get_pp_group().is_last_rank:
-                    model_input.sampling_metadata.skip_sampler_cpu_output = False
+                    # model_input.sampling_metadata.skip_sampler_cpu_output = False
+                    model_input.sampling_metadata.skip_sampler_cpu_output = True
                 else:
                     model_input.sampling_metadata.skip_sampler_cpu_output = True
             
@@ -273,6 +279,10 @@ class MultiStepModelRunner(ModelRunner):
                         self.flashinfer_decode_wrappers[idx]
 
                 # if step == 0:
+                # wait on cuda event
+                
+                # self.step_cuda_events[idx-1%NUM_FLASHINFER_WORKSPACE_BUFFERS].wait()
+                # self.step_cuda_events[idx].wait()
                 model_input.attn_metadata.begin_forward(idx)
                 # if step != num_steps - 1:
                 # else:
@@ -293,15 +303,17 @@ class MultiStepModelRunner(ModelRunner):
             multi_modal_kwargs = model_input.multi_modal_kwargs or {}
 
 
-            if False:
+            if True:
                 # We do this here to take advantage of async execution:
                 # at this point, the main GPU stream will be occupied with
                 # the previous forward pass, leaving CPU idle. Therefore,
                 # we can pythonize the outputs that are ready essentially
                 # for free.
-                for output in outputs:
-                    output.maybe_pythonize(model_input,
-                                            self._copy_stream)
+                if get_pp_group().is_last_rank:
+                    if self.is_driver_worker:
+                        for o in model_outputs:
+                            o.maybe_pythonize(model_input,
+                                              self._copy_stream)
             # print(f'\t\t\t------ON step {step} model executable')
             # print('--')
             hidden_states = model_executable(
@@ -312,6 +324,8 @@ class MultiStepModelRunner(ModelRunner):
                 intermediate_tensors=intermediate_tensors,
                 **multi_modal_kwargs,
             )
+            # self.step_cuda_events[idx] = torch.cuda.Event()
+            # self.step_cuda_events[idx].record(current_stream)
             # print(f'\t\t\t------ON step {step} compute logits')
 
             # Compute the logits.
@@ -322,13 +336,24 @@ class MultiStepModelRunner(ModelRunner):
 
                 if self.is_driver_worker:
                     # Sample the next token.
-                    outputs.append(
-                        self.model.sample(
-                            logits=logits,
-                            sampling_metadata=model_input.sampling_metadata,
-                        ))
+                    output = self.model.sample(
+                                logits=logits,
+                                sampling_metadata=model_input.sampling_metadata,
+                            )
+
+                    output_ready_event = torch.cuda.Event()
+                    output_ready_event.record(current_stream)
+                    # prev_parameters_tensors = (output.sampling_parameters_tensors,
+                    #                            output.sampling_token_tensors)
+                    output = ModelOutput(output, output_ready_event,
+                                        pythonized = not model_input.sampling_metadata.skip_sampler_cpu_output)
+                    model_outputs.append(output)
                 if self.return_hidden_states:
                     raise ValueError("return_hidden_states is not supported for MultiStepModelRunner.")
+            
+
+
+
 
             # TODO(will) take a close look at this logic for TP
             # if not self.is_driver_worker:
@@ -337,7 +362,7 @@ class MultiStepModelRunner(ModelRunner):
 
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
-                assert num_steps > 1
+                last_output = model_outputs[-1].sampler_output
                 # print(f'\t\t\t------ON step {step} update_model_input')
                 if get_pp_group().is_last_rank:
                     # broadcast the sampled token to all pp stages
@@ -345,15 +370,15 @@ class MultiStepModelRunner(ModelRunner):
                         # print('broadcasting from last rank driver')
                         pp_group = get_pp_group()
                         pp_group.broadcast_tensor_dict(
-                            {"sampled_token_ids":outputs[-1].sampled_token_ids},
+                            {"sampled_token_ids":last_output.sampled_token_ids},
                             src=pp_group.world_size - 1)
 
                             #src=get_pp_group().last_rank)
                         # pp_group.barrier()
                         get_tp_group().broadcast_tensor_dict(
-                            {"sampled_token_ids":outputs[-1].sampled_token_ids})
+                            {"sampled_token_ids":last_output.sampled_token_ids})
                             # src=get_tp_group().first_rank)
-                        out = outputs[-1]
+                        out = last_output
                         # print('done broadcasting from last rank driver')
                     else:
                         # print('broadcasting from last rank worker')
@@ -379,18 +404,19 @@ class MultiStepModelRunner(ModelRunner):
                     # print('after   recv broadcasting from non last rank')
                     out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
                     # model_input = self._advance_step(model_input, out)
-                # model_input = self.update_model_input(model_input, outputs[-1])
+                # model_input = self.update_model_input(model_input, last_output)
                 model_input = self._advance_step_gpu(model_input, out, idx)
             else:
+                pass
+
                 # if model_input.sampling_metadata.skip_sampler_cpu_output:
-                # print('final step, building outputs')
+                # print('final step, building model_outputs')
                 # pass
-                if get_pp_group().is_last_rank:
-                    if self.is_driver_worker:
-                        # NOTE(will): maybe make this return a new sampleroutput
-                        # instead of modiyfing the existing one
-                        for output in outputs[:-1]:
-                            pythonize_sampler_output(model_input, output)
+                # if get_pp_group().is_last_rank:
+                #     if self.is_driver_worker:
+                #         for output in model_outputs[:-1]:
+                #             output.maybe_pythonize(model_input, self._copy_stream)
+                            # pythonize_sampler_output(model_input, output)
             # get_tp_group().barrier()    
                 
         if not get_pp_group().is_last_rank:
@@ -399,7 +425,11 @@ class MultiStepModelRunner(ModelRunner):
         if not self.is_driver_worker:
             return []
 
-        return outputs
+        for output in model_outputs:
+            output.pythonize(model_input, self._copy_stream)
+
+        # return model_outputs
+        return [output.sampler_output for output in model_outputs]
 
 
 
