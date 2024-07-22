@@ -29,6 +29,57 @@ from vllm.attention.backends.flashinfer import NUM_FLASHINFER_WORKSPACE_BUFFERS
 
 logger = init_logger(__name__)
 
+@dataclasses.dataclass
+class ModelOutput:
+    """The output of a single model forward pass.
+
+    The sampler_output_ready_event is set when the tensors in
+    sampler_output are ready (the model+sampler forward pass has
+    completed). We use the event to synchronize the GPU->CPU transfer,
+    which we want to only run when the data has been written to the
+    GPU tensors. Until the event is ready, the tensors in sampler_output
+    will have garbage data.
+    """
+    sampler_output: SamplerOutput
+    sampler_output_ready_event: torch.cuda.Event
+    pythonized_sampler_output: Optional[SamplerOutput] = None
+
+    def pythonize(self, input_metadata: ModelInputForGPUWithSamplingMetadata,
+                  copy_stream: torch.cuda.Stream) -> SamplerOutput:
+        """Pythonize the output. Blocking."""
+        if self.pythonized_sampler_output is None:
+            self.pythonized_sampler_output = (
+                self._pythonize_sampler_output_wait_on_event(
+                    input_metadata, copy_stream))
+        return self.pythonized_sampler_output
+
+    def maybe_pythonize(
+            self, input_metadata: ModelInputForGPUWithSamplingMetadata,
+            copy_stream: torch.cuda.Stream) -> Optional[SamplerOutput]:
+        """Pythonize the output if ready, else return None. Non-blocking."""
+        if self.pythonized_sampler_output is None:
+            self.pythonized_sampler_output = (
+                self._pythonize_sampler_output_if_event_ready(
+                    input_metadata, copy_stream))
+        return self.pythonized_sampler_output
+
+    def _pythonize_sampler_output_wait_on_event(
+            self, input_metadata: ModelInputForGPUWithSamplingMetadata,
+            copy_stream: torch.cuda.Stream) -> SamplerOutput:
+        self.sampler_output_ready_event.synchronize()
+        with torch.cuda.stream(copy_stream):
+            return pythonize_sampler_output(self.sampler_output,
+                                            input_metadata)
+
+    def _pythonize_sampler_output_if_event_ready(
+            self, input_metadata: ModelInputForGPUWithSamplingMetadata,
+            copy_stream: torch.cuda.Stream) -> Optional[SamplerOutput]:
+        if self.sampler_output_ready_event.query():
+            with torch.cuda.stream(copy_stream):
+                return pythonize_sampler_output(self.sampler_output,
+                                                input_metadata)
+        return None
+
 
 # TODO(will) use this class for T1DraftModelRunner
 class MultiStepModelRunner(ModelRunner):
@@ -240,6 +291,17 @@ class MultiStepModelRunner(ModelRunner):
                 model_executable = self.model
 
             multi_modal_kwargs = model_input.multi_modal_kwargs or {}
+
+
+            if False:
+                # We do this here to take advantage of async execution:
+                # at this point, the main GPU stream will be occupied with
+                # the previous forward pass, leaving CPU idle. Therefore,
+                # we can pythonize the outputs that are ready essentially
+                # for free.
+                for output in outputs:
+                    output.maybe_pythonize(model_input,
+                                            self._copy_stream)
             # print(f'\t\t\t------ON step {step} model executable')
             # print('--')
             hidden_states = model_executable(
@@ -271,7 +333,7 @@ class MultiStepModelRunner(ModelRunner):
             # TODO(will) take a close look at this logic for TP
             # if not self.is_driver_worker:
             #     return []
-            get_tp_group().barrier()    
+            # get_tp_group().barrier()    
 
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
@@ -287,7 +349,7 @@ class MultiStepModelRunner(ModelRunner):
                             src=pp_group.world_size - 1)
 
                             #src=get_pp_group().last_rank)
-                        pp_group.barrier()
+                        # pp_group.barrier()
                         get_tp_group().broadcast_tensor_dict(
                             {"sampled_token_ids":outputs[-1].sampled_token_ids})
                             # src=get_tp_group().first_rank)
@@ -309,7 +371,7 @@ class MultiStepModelRunner(ModelRunner):
                         output_dict = pp_group.broadcast_tensor_dict(
                             src=pp_group.world_size - 1)
                             # src=get_pp_group().last_rank)
-                        get_pp_group().barrier()
+                        # get_pp_group().barrier()
                         get_tp_group().broadcast_tensor_dict(
                             {"sampled_token_ids":output_dict["sampled_token_ids"]})
                     else:
@@ -325,8 +387,11 @@ class MultiStepModelRunner(ModelRunner):
                 # pass
                 if get_pp_group().is_last_rank:
                     if self.is_driver_worker:
-                        self.pythonize_outputs(model_input, outputs[:-1])
-            get_tp_group().barrier()    
+                        # NOTE(will): maybe make this return a new sampleroutput
+                        # instead of modiyfing the existing one
+                        for output in outputs[:-1]:
+                            pythonize_sampler_output(model_input, output)
+            # get_tp_group().barrier()    
                 
         if not get_pp_group().is_last_rank:
             return hidden_states
@@ -337,64 +402,6 @@ class MultiStepModelRunner(ModelRunner):
         return outputs
 
 
-    def pythonize_outputs(self, 
-    model_input: ModelInputForGPUWithSamplingMetadata,
-                          outputs: List[SamplerOutput]) -> List[SamplerOutput]:
-        for output in outputs:
-            # samples generation should have been skipped
-            assert not output.outputs 
-
-            # print shapes
-            # print('output.sampled_token_ids', output.sampled_token_ids.shape)
-            # print('output.logprobs', output.logprobs.shape)
-            samples = torch.empty(*output.sampled_token_ids.shape,
-                          dtype=output.sampled_token_ids.dtype,
-                          device="cpu",
-                          pin_memory=True)
-            logprobs = torch.empty(*output.logprobs.shape,
-                                dtype=output.logprobs.dtype,
-                                device="cpu",
-                                pin_memory=True)
-            # prompt_logprobs = torch.empty(
-            #     *output.prompt_logprobs.shape,
-            #     dtype=output.prompt_logprobs.dtype,
-            #     device="cpu",
-            #     pin_memory=True)
-
-            # CPU GPU sync
-            # logprobs = logprobs.copy_(output.logprobs, non_blocking=False)
-            samples = samples.copy_(output.sampled_token_ids, non_blocking=False)
-
-            samples = samples.tolist()
-            # logprobs = logprobs.tolist()
-            # print('samples', samples)
-            # print('logprobs', logprobs)
-
-
-            # from vllm.model_executor.layers.sampler import _get_logprobs
-
-
-            # output.sampled_token_ids = output.sampled_token_ids.cpu()
-            # token_ids = output.sampled_token_ids.tolist()
-            sampling_metadata = model_input.sampling_metadata
-
-            for (seq_group, sample_result) in zip(sampling_metadata.seq_groups,
-                                            samples):
-                seq_ids = seq_group.seq_ids
-                # next_token_ids, parent_ids = sample_result
-                next_token_ids= sample_result
-                parent_ids = [0]
-                seq_outputs: List[SequenceOutput] = []
-                for parent_id, next_token_id in zip(parent_ids,
-                                                            next_token_ids):
-                    # print('SequenceOutput', seq_ids[parent_id], next_token_id)
-                    seq_outputs.append(
-                        SequenceOutput(
-                            seq_ids[parent_id], 
-                            next_token_id, {next_token_id:Logprob(logprob=4)}))
-                # print('CompletionSequenceGroupOutput', seq_outputs)
-                output.outputs.append(
-                    CompletionSequenceGroupOutput(seq_outputs, None))
 
     def _advance_step(
         self,
@@ -563,3 +570,61 @@ class MultiStepModelRunner(ModelRunner):
         new_model_input.sampling_metadata.reuse_sampling_tensors = True
 
         return new_model_input
+
+def pythonize_sampler_output(model_input: ModelInputForGPUWithSamplingMetadata,
+                             output: SamplerOutput) -> SamplerOutput:
+    
+    # samples generation should have been skipped
+    assert not output.outputs 
+
+    # print shapes
+    # print('output.sampled_token_ids', output.sampled_token_ids.shape)
+    # print('output.logprobs', output.logprobs.shape)
+    samples = torch.empty(*output.sampled_token_ids.shape,
+                    dtype=output.sampled_token_ids.dtype,
+                    device="cpu",
+                    pin_memory=True)
+    logprobs = torch.empty(*output.logprobs.shape,
+                        dtype=output.logprobs.dtype,
+                        device="cpu",
+                        pin_memory=True)
+    # prompt_logprobs = torch.empty(
+    #     *output.prompt_logprobs.shape,
+    #     dtype=output.prompt_logprobs.dtype,
+    #     device="cpu",
+    #     pin_memory=True)
+
+    # CPU GPU sync
+    # logprobs = logprobs.copy_(output.logprobs, non_blocking=False)
+    samples = samples.copy_(output.sampled_token_ids, non_blocking=False)
+
+    samples = samples.tolist()
+    # logprobs = logprobs.tolist()
+    # print('samples', samples)
+    # print('logprobs', logprobs)
+
+
+    # from vllm.model_executor.layers.sampler import _get_logprobs
+
+
+    # output.sampled_token_ids = output.sampled_token_ids.cpu()
+    # token_ids = output.sampled_token_ids.tolist()
+    sampling_metadata = model_input.sampling_metadata
+
+    for (seq_group, sample_result) in zip(sampling_metadata.seq_groups,
+                                    samples):
+        seq_ids = seq_group.seq_ids
+        # next_token_ids, parent_ids = sample_result
+        next_token_ids= sample_result
+        parent_ids = [0]
+        seq_outputs: List[SequenceOutput] = []
+        for parent_id, next_token_id in zip(parent_ids,
+                                                    next_token_ids):
+            # print('SequenceOutput', seq_ids[parent_id], next_token_id)
+            seq_outputs.append(
+                SequenceOutput(
+                    seq_ids[parent_id], 
+                    next_token_id, {next_token_id:Logprob(logprob=4)}))
+        # print('CompletionSequenceGroupOutput', seq_outputs)
+        output.outputs.append(
+            CompletionSequenceGroupOutput(seq_outputs, None))
