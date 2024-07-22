@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from vllm.worker.model_runner import (GPUModelRunnerBase,
                                           ModelInputForGPUBuilder)
 
+NUM_FLASHINFER_WORKSPACE_BUFFERS = 3
 
 class FlashInferBackend(AttentionBackend):
 
@@ -105,11 +106,13 @@ class FlashInferMetadata(AttentionMetadata):
     # [0, 3, 6, 8]
     # The indptr of the paged kv cache, shape: [batch_size + 1]
     paged_kv_indptr: Optional[torch.Tensor] = None
+    paged_kv_indptr_cpu: Optional[List[Optional[torch.Tensor]]] = None
     # The page indices of the paged kv cache
     paged_kv_indices: Optional[torch.Tensor] = None
     # The number of entries in the last page of each request in
     # the paged kv cache, shape: [batch_size]
     paged_kv_last_page_len: Optional[torch.Tensor] = None
+    paged_kv_last_page_len_cpu: Optional[List[Optional[torch.Tensor]]] = None
     # The number of query/output heads
     num_qo_heads: Optional[int] = None
     # The number of key/value heads
@@ -134,7 +137,7 @@ class FlashInferMetadata(AttentionMetadata):
                 f"Only {supported_head_sizes} are supported for head_dim,",
                 f"received {self.head_dim}.")
 
-    def begin_forward(self):
+    def begin_forward(self, idx: int):
         if self.num_prefill_tokens > 0:
             if self.paged_kv_indices is None:
                 return
@@ -181,7 +184,10 @@ class FlashInferMetadata(AttentionMetadata):
                 self.page_size,
                 # Disable flashinfer's pos encoding and use vllm's rope.
                 pos_encoding_mode="NONE",
-                data_type=self.data_type)
+                data_type=self.data_type,
+                indptr_cpu=self.paged_kv_indptr_cpu[idx],
+                last_page_len_cpu=self.paged_kv_last_page_len_cpu[idx],
+                )
 
     def asdict_zerocopy(self,
                         skip_fields: Optional[Set[str]] = None
@@ -414,6 +420,16 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
 
         kv_cache_dtype = get_kv_cache_torch_dtype(runner.kv_cache_dtype,
                                                   runner.model_config.dtype)
+
+        indptr_cpu_list = [
+            paged_kv_indptr_tensor.clone().to('cpu')
+            for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)
+        ]
+        last_page_len_cpu_list = [
+            paged_kv_last_page_len_tensor.clone().to('cpu')
+            for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)
+        ]
+
         return FlashInferMetadata(
             num_prefills=self.num_prefills,
             seq_lens_tensor=seq_lens_tensor,
@@ -425,6 +441,8 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             paged_kv_indptr=paged_kv_indptr_tensor,
             paged_kv_indices=paged_kv_indices_tensor,
             paged_kv_last_page_len=paged_kv_last_page_len_tensor,
+            paged_kv_indptr_cpu=indptr_cpu_list,
+            paged_kv_last_page_len_cpu=last_page_len_cpu_list,
             block_table_bound=block_table_bound_tensor,
             num_qo_heads=runner.model_config.get_num_attention_heads(
                 runner.parallel_config),
