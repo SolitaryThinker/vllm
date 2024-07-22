@@ -151,7 +151,7 @@ class MultiStepModelRunner(ModelRunner):
         self.flashinfer_prefill_workspace_buffers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
         self.flashinfer_prefill_wrappers = [None] * NUM_FLASHINFER_WORKSPACE_BUFFERS
 
-        self.step_cuda_events = [torch.cuda.Event()] * NUM_FLASHINFER_WORKSPACE_BUFFERS
+        self.step_cuda_events = [torch.cuda.Event(blocking=True)] * NUM_FLASHINFER_WORKSPACE_BUFFERS
 
     def prepare_model_input(
         self,
@@ -250,21 +250,23 @@ class MultiStepModelRunner(ModelRunner):
             if self.attn_backend.get_name() == "flashinfer":
                 assert model_input.attn_metadata is not None
                 assert model_input.input_tokens is not None
-                if self.flashinfer_decode_workspace_buffers[idx] is None:
-                    self.flashinfer_decode_workspace_buffers[idx] = torch.empty(
-                        FLASHINFER_WORKSPACE_BUFFER_SIZE,
-                        dtype=torch.uint8,
-                        device=self.device)
+                # if self.flashinfer_decode_workspace_buffers[0] is None:
+                if self.flashinfer_decode_wrappers[idx] is None:
+                    if self.flashinfer_decode_workspace_buffers[0] is None:
+                        self.flashinfer_decode_workspace_buffers[0] = torch.empty(
+                            FLASHINFER_WORKSPACE_BUFFER_SIZE,
+                            dtype=torch.uint8,
+                            device=self.device)
+                        self.flashinfer_prefill_workspace_buffers[0] = torch.empty(
+                            FLASHINFER_WORKSPACE_BUFFER_SIZE,
+                            dtype=torch.uint8,
+                            device=self.device)
                     self.flashinfer_decode_wrappers[idx] = \
                         BatchDecodeWithPagedKVCacheWrapper(
-                        self.flashinfer_decode_workspace_buffers[idx], "NHD")
-                    self.flashinfer_prefill_workspace_buffers[idx] = torch.empty(
-                        FLASHINFER_WORKSPACE_BUFFER_SIZE,
-                        dtype=torch.uint8,
-                        device=self.device)
+                        self.flashinfer_decode_workspace_buffers[0], "NHD")
                     self.flashinfer_prefill_wrappers[idx] = \
                         BatchPrefillWithPagedKVCacheWrapper(
-                        self.flashinfer_prefill_workspace_buffers[idx], "NHD")
+                        self.flashinfer_prefill_workspace_buffers[0], "NHD")
 
                 model_input.attn_metadata.prefill_wrapper = \
                     self.flashinfer_prefill_wrappers[idx]
@@ -325,7 +327,9 @@ class MultiStepModelRunner(ModelRunner):
                 **multi_modal_kwargs,
             )
             # self.step_cuda_events[idx] = torch.cuda.Event()
-            # self.step_cuda_events[idx].record(current_stream)
+            # print(f'recording event for step {step}, idx: {idx}')
+            self.step_cuda_events[idx] = torch.cuda.Event(blocking=True)
+            self.step_cuda_events[idx].record(current_stream)
             # print(f'\t\t\t------ON step {step} compute logits')
 
             # Compute the logits.
@@ -362,11 +366,11 @@ class MultiStepModelRunner(ModelRunner):
 
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
-                last_output = model_outputs[-1].sampler_output
                 # print(f'\t\t\t------ON step {step} update_model_input')
                 if get_pp_group().is_last_rank:
                     # broadcast the sampled token to all pp stages
                     if self.is_driver_worker:
+                        last_output = model_outputs[-1].sampler_output
                         # print('broadcasting from last rank driver')
                         pp_group = get_pp_group()
                         pp_group.broadcast_tensor_dict(
@@ -405,7 +409,12 @@ class MultiStepModelRunner(ModelRunner):
                     out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
                     # model_input = self._advance_step(model_input, out)
                 # model_input = self.update_model_input(model_input, last_output)
-                model_input = self._advance_step_gpu(model_input, out, idx)
+                # if self.attn_backend.get_name() == "flash_attention":
+                #     model_input = self._advance_step_flashattn_gpu(model_input, out, idx)
+                # elif self.attn_backend.get_name() == "flashinfer":
+                # print(f'synch event for step {step}, idx: {(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS}')
+                self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                model_input = self._advance_step_flashinfer_gpu(model_input, out, idx+1)
             else:
                 pass
 
@@ -525,7 +534,7 @@ class MultiStepModelRunner(ModelRunner):
             attn_metadata=next_attn_metadata,
         )
 
-    def _advance_step_gpu(
+    def _advance_step_flashinfer_gpu(
         self,
         model_input: ModelInputForGPUWithSamplingMetadata,
         last_output: SamplerOutput,
@@ -577,9 +586,9 @@ class MultiStepModelRunner(ModelRunner):
         bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
 
         # we update next step's attn_metadata
-        model_input.attn_metadata.paged_kv_indptr_cpu[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
+        model_input.attn_metadata.paged_kv_indptr_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
             torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
-        model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
 
         new_model_input = self._model_input_cls(
             seq_lens=seq_lens,

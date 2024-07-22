@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from vllm.worker.model_runner import (GPUModelRunnerBase,
                                           ModelInputForGPUBuilder)
 
-NUM_FLASHINFER_WORKSPACE_BUFFERS = 3
+NUM_FLASHINFER_WORKSPACE_BUFFERS = 2
 
 class FlashInferBackend(AttentionBackend):
 
@@ -423,11 +423,11 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
 
         indptr_cpu_list = [
             paged_kv_indptr_tensor.clone().to('cpu')
-            for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)
+            for _ in range(1)
         ]
         last_page_len_cpu_list = [
             paged_kv_last_page_len_tensor.clone().to('cpu')
-            for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)
+            for _ in range(1)
         ]
 
         return FlashInferMetadata(
