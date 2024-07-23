@@ -183,8 +183,8 @@ class FlashInferMetadata(AttentionMetadata):
                 # Disable flashinfer's pos encoding and use vllm's rope.
                 pos_encoding_mode="NONE",
                 data_type=self.data_type,
-                indptr_cpu=self.paged_kv_indptr_cpu[idx],
-                last_page_len_cpu=self.paged_kv_last_page_len_cpu[idx],
+                indptr_cpu=self.paged_kv_indptr_cpu[0],
+                last_page_len_cpu=self.paged_kv_last_page_len_cpu[0],
                 )
 
     def asdict_zerocopy(self,
