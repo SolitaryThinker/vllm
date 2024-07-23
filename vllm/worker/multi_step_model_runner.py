@@ -586,9 +586,11 @@ class MultiStepModelRunner(ModelRunner):
         bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
 
         # we update next step's attn_metadata
-        model_input.attn_metadata.paged_kv_indptr_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
+        # model_input.attn_metadata.paged_kv_indptr_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
+        model_input.attn_metadata.paged_kv_indptr_cpu[0][1:] = torch.cumsum(
             torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
-        model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
+        # model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu[0].remainder_(self.block_size).add_(1)
 
         new_model_input = self._model_input_cls(
             seq_lens=seq_lens,
