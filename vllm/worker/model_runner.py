@@ -24,6 +24,7 @@ except ImportError:
     FLASHINFER_WORKSPACE_BUFFER_SIZE = 0
 
 from vllm.attention import AttentionMetadata, get_attn_backend
+from vllm.attention.backends.flashinfer import NUM_FLASHINFER_WORKSPACE_BUFFERS
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, MultiModalConfig, ParallelConfig,
                          PromptAdapterConfig, SchedulerConfig)
@@ -1065,16 +1066,19 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
             torch.empty(FLASHINFER_WORKSPACE_BUFFER_SIZE,
                                                 dtype=torch.uint8,
                                               device=self.device)
-            indices_buffer = torch.empty(max_batch_size *
+            indices_buffers = [torch.empty(max_batch_size *
                                          self.cache_config.num_gpu_blocks,
                                          dtype=torch.int32,
                                          device=self.device)
-            indptr_buffer = torch.empty(max_batch_size + 1,
+                              for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)]
+            indptr_buffers = [torch.empty(max_batch_size + 1,
                                         dtype=torch.int32,
                                         device=self.device)
-            last_page_len_buffer = torch.empty(max_batch_size,
+                              for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)]
+            last_page_len_buffers = [torch.empty(max_batch_size,
                                                dtype=torch.int32,
                                                device=self.device)
+                                               for _ in range(NUM_FLASHINFER_WORKSPACE_BUFFERS)]
 
         with graph_capture() as graph_capture_context:
             # NOTE: Capturing the largest batch size first may help reduce the
@@ -1083,9 +1087,11 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                     self.parallel_config.pipeline_parallel_size):
                 for batch_size in reversed(batch_size_capture_list):
                     if self.attn_backend.get_name() == "flashinfer":
-                        _indptr_buffer = indptr_buffer[:batch_size + 1]
-                        _last_page_len_buffer = last_page_len_buffer[:
-                                                                     batch_size]
+                        _indptr_buffers = [indptr_buffer[:batch_size + 1]
+                                            for indptr_buffer in indptr_buffers]
+                        _last_page_len_buffers = [last_page_len_buffer[:
+                                                                    batch_size]
+                                                for last_page_len_buffer in last_page_len_buffers]
 
                         num_qo_heads = (
                             self.model_config.get_num_attention_heads(
@@ -1096,11 +1102,17 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             use_tensor_cores = True
                         else:
                             use_tensor_cores = False
-                        decode_wrapper = \
-                            CUDAGraphBatchDecodeWithPagedKVCacheWrapper(
-                            decode_workspace_buffer, _indptr_buffer,
-                            indices_buffer, _last_page_len_buffer, "NHD",
-                            use_tensor_cores)
+                        
+
+                        decode_wrappers = []
+                        for idx in range(NUM_FLASHINFER_WORKSPACE_BUFFERS):
+                        # for idx in range(1):
+                            decode_wrappers.append(
+                                CUDAGraphBatchDecodeWithPagedKVCacheWrapper(
+                                decode_workspace_buffer, _indptr_buffers[idx],
+                                indices_buffers[idx], _last_page_len_buffers[idx], "NHD",
+                                use_tensor_cores)
+                            )
                         kv_cache_dtype = get_kv_cache_torch_dtype(
                             self.kv_cache_dtype, self.model_config.dtype)
 
@@ -1139,7 +1151,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             device=self.device,
                             data_type=kv_cache_dtype,
                             use_cuda_graph=True,
-                            decode_wrapper=decode_wrapper,
+                            decode_wrapper=decode_wrappers[0],
                             prefill_wrapper=None)
                         attn_metadata.begin_forward()
                     else:
@@ -1179,14 +1191,14 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                         self.model, self.attn_backend.get_name())
 
                     if self.attn_backend.get_name() == "flashinfer":
-                        graph_runner.flashinfer_indptr_buffer = _indptr_buffer
-                        graph_runner.flashinfer_indices_buffer = indices_buffer
-                        graph_runner.flashinfer_last_page_len_buffer = \
-                            _last_page_len_buffer
+                        graph_runner.flashinfer_indptr_buffers = _indptr_buffers
+                        graph_runner.flashinfer_indices_buffers = indices_buffers
+                        graph_runner.flashinfer_last_page_len_buffers = \
+                            _last_page_len_buffers
                         graph_runner.flashinfer_decode_workspace_buffer = \
                                 decode_workspace_buffer
-                        graph_runner.flashinfer_decode_wrapper = \
-                            decode_wrapper
+                        graph_runner.flashinfer_decode_wrappers = \
+                            decode_wrappers
 
                     capture_inputs = {
                         "input_ids":
@@ -1417,8 +1429,8 @@ class CUDAGraphRunner:
         self.flashinfer_indptr_buffer: Optional[torch.Tensor] = None
         self.flashinfer_indices_buffer: Optional[torch.Tensor] = None
         self.flashinfer_last_page_len_buffer: Optional[torch.Tensor] = None
-        self.flashinfer_decode_wrapper: Optional[
-            CUDAGraphBatchDecodeWithPagedKVCacheWrapper] = None
+        self.flashinfer_decode_wrappers: Optional[List[Optional[
+            CUDAGraphBatchDecodeWithPagedKVCacheWrapper]]] = None
 
     @property
     def graph(self):
