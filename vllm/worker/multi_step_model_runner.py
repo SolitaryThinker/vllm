@@ -266,12 +266,15 @@ class MultiStepModelRunner(ModelRunner):
                     batch_size = model_input.input_tokens.shape[0]
                     model_input.attn_metadata.decode_wrapper = self.graph_runners[
                         model_input.
-                        virtual_engine][batch_size].flashinfer_decode_wrapper
+                        virtual_engine][batch_size].flashinfer_decode_wrappers[idx]
                 else:
                     model_input.attn_metadata.decode_wrapper = \
                         self.flashinfer_decode_wrappers[idx]
 
+
+                # print('bf begin fwd')
                 model_input.attn_metadata.begin_forward()
+            # print('after fwd')
 
             # Currently cuda graph is only supported by the decode phase.
             assert model_input.attn_metadata is not None
@@ -318,6 +321,9 @@ class MultiStepModelRunner(ModelRunner):
                 pass
                 # get_pp_group().send_tensor_dict(hidden_states.tensors)
                 # return [None]
+            # print('before manual sync')
+            # torch.cuda.synchronize()
+            # print('after manual sync')
             self.step_cuda_events[idx] = torch.cuda.Event(blocking=True)
             self.step_cuda_events[idx].record(current_stream)
             # print(f'\t\t\t------ON step {step} compute logits')
@@ -352,8 +358,10 @@ class MultiStepModelRunner(ModelRunner):
                 out = self._get_sampled_token_ids(model_outputs)
 
                 # FIXME debugging cuda event synchronization
-                # self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
-                self.step_cuda_events[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                # print('before sync')
+                # self.step_cuda_events[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                # print('after sync')
                 # model_input = self._advance_step_flashinfer_gpu(model_input, out, idx+1)
                 model_input = self._advance_step(model_input, out)
 
@@ -557,6 +565,7 @@ class MultiStepModelRunner(ModelRunner):
         num_queries = len(model_input.query_lens)
         # print('num_seqs', num_seqs)
         # print('num_queries', num_queries)
+        num_queries = num_seqs
         # assert num_seqs == num_queries
         attn_metadata = model_input.attn_metadata
         # Update GPU tensors
