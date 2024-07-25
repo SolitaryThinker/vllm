@@ -57,6 +57,9 @@ __global__ void advance_step_kernel(int num_seqs, int num_queries,
 inline void verify_tensor(std::string const& name, torch::Tensor& t,
                           int64_t const size_0, int64_t const size_1,
                           c10::ScalarType const type) {
+  TORCH_CHECK(t.is_cuda(), "The provided tensor is not on a GPU.");
+
+
   bool size_0_cond = true;
   if (size_0 != -1) {
     size_0_cond = t.size(0) == size_0;
@@ -155,7 +158,7 @@ __global__ void advance_step_flashinfer_indices_kernel(
   int col = idx % block_tables_stride;
 
   if (row < num_queries && col < block_table_bound_ptr[row]) {
-      // printf("row: %d, col: %d\n", row, col);
+      // printf("row: %d, col: %d, stride %d, idx: %d\n", row, col, block_tables_stride, idx);
       // printf("seq_start_loc_ptr[row]: %d\n", seq_start_loc_ptr[row]);
       // printf("seq_start_loc_ptr[row]/block_size: %d\n", div_ceil(seq_start_loc_ptr[row],block_size));
       // printf("seq_start_loc_ptr[row]/block_size: %d\n", div_ceil(seq_start_loc_ptr[row],block_size) + col);

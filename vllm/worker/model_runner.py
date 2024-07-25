@@ -915,8 +915,8 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                     self.parallel_config.pipeline_parallel_size):
                 for batch_size in reversed(batch_size_capture_list):
                     if self.attn_backend.get_name() == "flashinfer":
-                        indptr_buffer = indptr_buffer[:batch_size + 1]
-                        last_page_len_buffer = last_page_len_buffer[:
+                        _indptr_buffer = indptr_buffer[:batch_size + 1]
+                        _last_page_len_buffer = last_page_len_buffer[:
                                                                     batch_size]
 
                         num_qo_heads = (
@@ -930,8 +930,8 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             use_tensor_cores = False
                         decode_wrapper = \
                             CUDAGraphBatchDecodeWithPagedKVCacheWrapper(
-                            decode_workspace_buffer, indptr_buffer,
-                            indices_buffer, last_page_len_buffer, "NHD",
+                            decode_workspace_buffer, _indptr_buffer,
+                            indices_buffer, _last_page_len_buffer, "NHD",
                             use_tensor_cores)
                         kv_cache_dtype = get_kv_cache_torch_dtype(
                             self.kv_cache_dtype, self.model_config.dtype)
@@ -945,9 +945,13 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                         query_start_loc_host = torch.arange(0,
                                                             batch_size + 1,
                                                             dtype=torch.int32)
+                        seq_lens_tensor = seq_lens[:batch_size]
+                        block_table_bound_tensor = torch.zeros(
+                            batch_size, dtype=torch.int)
 
                         attn_metadata = self.attn_backend.make_metadata(
                             num_prefills=0,
+                            seq_lens_tensor=seq_lens_tensor,
                             slot_mapping=slot_mapping[:batch_size],
                             num_prefill_tokens=0,
                             num_decode_tokens=batch_size,
@@ -957,6 +961,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             paged_kv_indices=paged_kv_indices_tensor_host,
                             paged_kv_last_page_len=
                             paged_kv_last_page_len_tensor_host,
+                            block_table_bound=block_table_bound_tensor,
                             num_qo_heads=num_qo_heads,
                             num_kv_heads=num_kv_heads,
                             head_dim=self.model_config.get_head_size(),
@@ -1006,10 +1011,10 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                         self.model, self.attn_backend.get_name())
 
                     if self.attn_backend.get_name() == "flashinfer":
-                        graph_runner.flashinfer_indptr_buffer = indptr_buffer
+                        graph_runner.flashinfer_indptr_buffer = _indptr_buffer
                         graph_runner.flashinfer_indices_buffer = indices_buffer
                         graph_runner.flashinfer_last_page_len_buffer = \
-                            last_page_len_buffer
+                            _last_page_len_buffer
                         graph_runner.flashinfer_decode_workspace_buffer = \
                                 decode_workspace_buffer
                         graph_runner.flashinfer_decode_wrapper = \
