@@ -1113,9 +1113,13 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                         query_start_loc_host = torch.arange(0,
                                                             batch_size + 1,
                                                             dtype=torch.int32)
+                        seq_lens_tensor = seq_lens[:batch_size]
+                        block_table_bound_tensor = torch.zeros(
+                            batch_size, dtype=torch.int)
 
                         attn_metadata = self.attn_backend.make_metadata(
                             num_prefills=0,
+                            seq_lens_tensor=seq_lens_tensor,
                             slot_mapping=slot_mapping[:batch_size],
                             num_prefill_tokens=0,
                             num_decode_tokens=batch_size,
@@ -1125,6 +1129,7 @@ class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
                             paged_kv_indices=paged_kv_indices_tensor_host,
                             paged_kv_last_page_len=
                             paged_kv_last_page_len_tensor_host,
+                            block_table_bound=block_table_bound_tensor,
                             num_qo_heads=num_qo_heads,
                             num_kv_heads=num_kv_heads,
                             head_dim=self.model_config.get_head_size(),

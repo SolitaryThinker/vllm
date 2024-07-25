@@ -226,23 +226,14 @@ class MultiStepModelRunner(ModelRunner):
         if get_pp_group().is_last_rank:
             self.model.sampler.include_gpu_probs_tensor = True
 
-
         virtual_engine = model_input.virtual_engine
         model_outputs: List[ModelOutput] = []
         current_stream = torch.cuda.current_stream()
 
         # print(f'------doing {num_steps} steps------')
+        model_input.sampling_metadata.skip_sampler_cpu_output = True
         for step in range(num_steps):
             # print(f'\t\t\t------ON step {step} -----')
-            if step != num_steps - 1:
-                model_input.sampling_metadata.skip_sampler_cpu_output = True
-            else:
-                if get_pp_group().is_last_rank:
-                    # model_input.sampling_metadata.skip_sampler_cpu_output = False
-                    model_input.sampling_metadata.skip_sampler_cpu_output = True
-                else:
-                    model_input.sampling_metadata.skip_sampler_cpu_output = True
-            
             idx = step % NUM_FLASHINFER_WORKSPACE_BUFFERS
 
             # print('skip_sampler_cpu_output', model_input.sampling_metadata.skip_sampler_cpu_output)
@@ -271,7 +262,7 @@ class MultiStepModelRunner(ModelRunner):
                 model_input.attn_metadata.prefill_wrapper = \
                     self.flashinfer_prefill_wrappers[idx]
                 if model_input.attn_metadata.use_cuda_graph:
-                    assert False
+                    # assert False
                     batch_size = model_input.input_tokens.shape[0]
                     model_input.attn_metadata.decode_wrapper = self.graph_runners[
                         model_input.
@@ -280,21 +271,14 @@ class MultiStepModelRunner(ModelRunner):
                     model_input.attn_metadata.decode_wrapper = \
                         self.flashinfer_decode_wrappers[idx]
 
-                # if step == 0:
-                # wait on cuda event
-                
-                # self.step_cuda_events[idx-1%NUM_FLASHINFER_WORKSPACE_BUFFERS].wait()
-                # self.step_cuda_events[idx].wait()
-                model_input.attn_metadata.begin_forward(idx)
-                # if step != num_steps - 1:
-                # else:
+                model_input.attn_metadata.begin_forward()
 
             # Currently cuda graph is only supported by the decode phase.
             assert model_input.attn_metadata is not None
             prefill_meta = model_input.attn_metadata.prefill_metadata
             decode_meta = model_input.attn_metadata.decode_metadata
             if prefill_meta is None and decode_meta.use_cuda_graph:
-                assert False
+                # assert False
                 assert model_input.input_tokens is not None
                 graph_batch_size = model_input.input_tokens.shape[0]
                 model_executable = (
@@ -303,7 +287,6 @@ class MultiStepModelRunner(ModelRunner):
                 model_executable = self.model
 
             multi_modal_kwargs = model_input.multi_modal_kwargs or {}
-
 
             if True:
                 # We do this here to take advantage of async execution:
@@ -317,7 +300,11 @@ class MultiStepModelRunner(ModelRunner):
                             o.maybe_pythonize(model_input,
                                               self._copy_stream)
             # print(f'\t\t\t------ON step {step} model executable')
-            # print('--')
+            intermediate_tensors = None
+            if not get_pp_group().is_first_rank:
+                pass
+                # intermediate_tensors = IntermediateTensors(
+                #     get_pp_group().recv_tensor_dict())
             hidden_states = model_executable(
                 input_ids=model_input.input_tokens,
                 positions=model_input.input_positions,
@@ -326,8 +313,11 @@ class MultiStepModelRunner(ModelRunner):
                 intermediate_tensors=intermediate_tensors,
                 **multi_modal_kwargs,
             )
-            # self.step_cuda_events[idx] = torch.cuda.Event()
-            # print(f'recording event for step {step}, idx: {idx}')
+            if not get_pp_group().is_last_rank:
+                # output is IntermediateTensors
+                pass
+                # get_pp_group().send_tensor_dict(hidden_states.tensors)
+                # return [None]
             self.step_cuda_events[idx] = torch.cuda.Event(blocking=True)
             self.step_cuda_events[idx].record(current_stream)
             # print(f'\t\t\t------ON step {step} compute logits')
@@ -356,78 +346,17 @@ class MultiStepModelRunner(ModelRunner):
                     raise ValueError("return_hidden_states is not supported for MultiStepModelRunner.")
             
 
-
-
-
-            # TODO(will) take a close look at this logic for TP
-            # if not self.is_driver_worker:
-            #     return []
-            # get_tp_group().barrier()    
-
             # Prepare the inputs for the next step.
             if step != num_steps - 1:
                 # print(f'\t\t\t------ON step {step} update_model_input')
-                if get_pp_group().is_last_rank:
-                    # broadcast the sampled token to all pp stages
-                    if self.is_driver_worker:
-                        last_output = model_outputs[-1].sampler_output
-                        # print('broadcasting from last rank driver')
-                        pp_group = get_pp_group()
-                        pp_group.broadcast_tensor_dict(
-                            {"sampled_token_ids":last_output.sampled_token_ids},
-                            src=pp_group.world_size - 1)
+                out = self._get_sampled_token_ids(model_outputs)
 
-                            #src=get_pp_group().last_rank)
-                        # pp_group.barrier()
-                        get_tp_group().broadcast_tensor_dict(
-                            {"sampled_token_ids":last_output.sampled_token_ids})
-                            # src=get_tp_group().first_rank)
-                        out = last_output
-                        # print('done broadcasting from last rank driver')
-                    else:
-                        # print('broadcasting from last rank worker')
-                        output_dict = get_tp_group().broadcast_tensor_dict()
-                            # src=get_tp_group().first_rank)
-                        out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
-                        # print('done broadcasting from last rank worker')
+                # FIXME debugging cuda event synchronization
+                # self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                self.step_cuda_events[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
+                # model_input = self._advance_step_flashinfer_gpu(model_input, out, idx+1)
+                model_input = self._advance_step(model_input, out)
 
-                    # model_input = self._advance_step(model_input, out)
-                else:
-                    # get next token from broadcast
-                    # print('before  recv broadcasting from non last rank')
-                    if self.is_driver_worker:
-                        pp_group = get_pp_group()
-                        output_dict = pp_group.broadcast_tensor_dict(
-                            src=pp_group.world_size - 1)
-                            # src=get_pp_group().last_rank)
-                        # get_pp_group().barrier()
-                        get_tp_group().broadcast_tensor_dict(
-                            {"sampled_token_ids":output_dict["sampled_token_ids"]})
-                    else:
-                        output_dict = get_tp_group().broadcast_tensor_dict()
-                    # print('after   recv broadcasting from non last rank')
-                    out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
-                    # model_input = self._advance_step(model_input, out)
-                # model_input = self.update_model_input(model_input, last_output)
-                # if self.attn_backend.get_name() == "flash_attention":
-                #     model_input = self._advance_step_flashattn_gpu(model_input, out, idx)
-                # elif self.attn_backend.get_name() == "flashinfer":
-                # print(f'synch event for step {step}, idx: {(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS}')
-                self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
-                model_input = self._advance_step_flashinfer_gpu(model_input, out, idx+1)
-            else:
-                pass
-
-                # if model_input.sampling_metadata.skip_sampler_cpu_output:
-                # print('final step, building model_outputs')
-                # pass
-                # if get_pp_group().is_last_rank:
-                #     if self.is_driver_worker:
-                #         for output in model_outputs[:-1]:
-                #             output.maybe_pythonize(model_input, self._copy_stream)
-                            # pythonize_sampler_output(model_input, output)
-            # get_tp_group().barrier()    
-                
         if not get_pp_group().is_last_rank:
             return hidden_states
 
@@ -439,10 +368,63 @@ class MultiStepModelRunner(ModelRunner):
 
         # return model_outputs
         return [output.sampler_output for output in model_outputs]
+    
+    def _get_sampled_token_ids(self, model_outputs):
+        if get_pp_group().is_last_rank:
+            # broadcast the sampled token to all pp stages
+            if self.is_driver_worker:
+                last_output = model_outputs[-1].sampler_output
+                # print('broadcasting from last rank driver')
+                pp_group = get_pp_group()
+                pp_group.broadcast_tensor_dict(
+                    {"sampled_token_ids":last_output.sampled_token_ids},
+                    src=pp_group.world_size - 1)
 
+                    #src=get_pp_group().last_rank)
+                # pp_group.barrier()
+                get_tp_group().broadcast_tensor_dict(
+                    {"sampled_token_ids":last_output.sampled_token_ids})
+                    # src=get_tp_group().first_rank)
+                out = last_output
+                # print('done broadcasting from last rank driver')
+            else:
+                # print('broadcasting from last rank worker')
+                output_dict = get_tp_group().broadcast_tensor_dict()
+                    # src=get_tp_group().first_rank)
+                out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
+                # print('done broadcasting from last rank worker')
 
+            # model_input = self._advance_step(model_input, out)
+        else:
+            # get next token from broadcast
+            # print('before  recv broadcasting from non last rank')
+            if self.is_driver_worker:
+                pp_group = get_pp_group()
+                output_dict = pp_group.broadcast_tensor_dict(
+                    src=pp_group.world_size - 1)
+                    # src=get_pp_group().last_rank)
+                # get_pp_group().barrier()
+                get_tp_group().broadcast_tensor_dict(
+                    {"sampled_token_ids":output_dict["sampled_token_ids"]})
+            else:
+                output_dict = get_tp_group().broadcast_tensor_dict()
+            # print('after   recv broadcasting from non last rank')
+            out = SamplerOutput([], sampled_token_ids=output_dict["sampled_token_ids"])
+        return out
 
     def _advance_step(
+        self,
+        model_input: ModelInputForGPUWithSamplingMetadata,
+        last_output: SamplerOutput,
+    ) -> ModelInputForGPUWithSamplingMetadata:
+        """Advance the model input for the next step."""
+
+        return self._advance_step_flashinfer_gpu(model_input, last_output)
+        # return self._advance_step_torch(model_input, last_output)
+
+
+
+    def _advance_step_torch(
         self,
         model_input: ModelInputForGPUWithSamplingMetadata,
         last_output: SamplerOutput,
@@ -465,12 +447,15 @@ class MultiStepModelRunner(ModelRunner):
                 seq.update_num_computed_tokens(1)
 
         sampled_tokens = last_output.sampled_token_ids.flatten()
-        model_input.input_tokens[:] = sampled_tokens
+        query_len = len(model_input.query_lens)
+        model_input.input_tokens[:query_len] = sampled_tokens
         model_input.input_positions.add_(1)
 
         # used for calculating blocks and slot mapping for decode
-        model_input.attn_metadata.seq_start_loc.add_(
-            model_input.attn_metadata.query_start_loc)
+        # model_input.attn_metadata.seq_start_loc.add_(
+        #     model_input.attn_metadata.query_start_loc)
+        model_input.attn_metadata.seq_start_loc.add_(1)
+
 
         # input_positions = input_positions[:num_tokens_to_generate]
         # input_positions = model_input.attn_metadata.seq_start_loc[1:]
@@ -510,6 +495,13 @@ class MultiStepModelRunner(ModelRunner):
             self.block_size).add_(1)
         model_input.sampling_metadata.reuse_sampling_tensors = True
 
+        seq_lens = list(map(lambda x: x + 1, model_input.seq_lens))
+        bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
+        model_input.attn_metadata.paged_kv_indptr_cpu[1:] = torch.cumsum(
+            torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
+        # model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu.remainder_(self.block_size).add_(1)
+
         # build the next step's attn_metadata
         # args coming from new_model_input are still on CPU.
         next_attn_metadata = dataclasses.replace(
@@ -538,7 +530,6 @@ class MultiStepModelRunner(ModelRunner):
         self,
         model_input: ModelInputForGPUWithSamplingMetadata,
         last_output: SamplerOutput,
-        idx: int,
     ) -> ModelInputForGPUWithSamplingMetadata:
         """Advance the model input for the next step."""
         # Append the output token to the sequence data.
@@ -557,15 +548,48 @@ class MultiStepModelRunner(ModelRunner):
                 seq.update_num_computed_tokens(1)
 
         sampled_tokens = last_output.sampled_token_ids.flatten()
-        model_input.input_tokens[:] = sampled_tokens
+        query_len = len(model_input.query_lens)
+        model_input.input_tokens[:query_len] = sampled_tokens
+        # print('sampled_tokens.shape', sampled_tokens.shape)
+        # print('model_input.input_tokens.shape', model_input.input_tokens.shape)
 
         num_seqs = len(model_input.seq_lens)
         num_queries = len(model_input.query_lens)
-        assert num_seqs == num_queries
+        # print('num_seqs', num_seqs)
+        # print('num_queries', num_queries)
+        # assert num_seqs == num_queries
         attn_metadata = model_input.attn_metadata
         # Update GPU tensors
         attn_metadata.seq_start_loc = None
         attn_metadata.query_start_loc = None
+        # print('BEFORE KERNEL indptr_buf ', model_input.attn_metadata.decode_wrapper._paged_kv_indptr_buf)
+        # print data ptr
+        # print('buffer.data_ptr', attn_metadata.decode_wrapper._paged_kv_indptr_buf.shape)
+        # print('paged_kv_indices.data_ptr', attn_metadata.paged_kv_indices.shape)
+        # print('paged_kv_indptr.data_ptr', attn_metadata.paged_kv_indptr.data_ptr())
+        # print('paged_kv_last_page_len.data_ptr', attn_metadata.paged_kv_last_page_len.data_ptr())
+        # print('block_table_bound.data_ptr', attn_metadata.block_table_bound.data_ptr())
+        # print('paged_kv_last_page_len', attn_metadata.paged_kv_last_page_len)
+        # print('paged_kv_last_page_len.device', attn_metadata.paged_kv_last_page_len.device)
+        # inp = dict(
+        #     num_seqs=num_seqs,
+        #     num_queries=num_queries,
+        #     block_size=self.block_size,
+        #     input_tokens=model_input.input_tokens.shape,
+        #     sampled_token_ids=model_input.input_tokens.shape,
+        #     input_positions=model_input.input_positions.shape,
+        #     seq_lens=attn_metadata.seq_lens_tensor.shape,
+        #     slot_mapping=attn_metadata.slot_mapping.shape,
+        #     block_tables=attn_metadata.block_tables.shape,
+        #     paged_kv_indices=attn_metadata.paged_kv_indices.shape,
+        #     paged_kv_indptr=attn_metadata.paged_kv_indptr.shape,
+        #     paged_kv_last_page_len=attn_metadata.paged_kv_last_page_len.shape,
+        #     block_table_bound=attn_metadata.block_table_bound.shape)
+        # print(inp)
+
+        # print('first sync')
+        # torch.cuda.synchronize(self.device)
+        # print('after first sync')
         ops.advance_step_flashinfer(
             num_seqs=num_seqs,
             num_queries=num_queries,
@@ -581,16 +605,34 @@ class MultiStepModelRunner(ModelRunner):
             paged_kv_indptr=attn_metadata.paged_kv_indptr,
             paged_kv_last_page_len=attn_metadata.paged_kv_last_page_len,
             block_table_bound=attn_metadata.block_table_bound)
+        # print('seoncd sync')
+        # torch.cuda.synchronize(self.device)
+        # print('after seoncd sync')
 
+        # print('AFTER KERNEL========')
+        # print('buffer.data_ptr', attn_metadata.decode_wrapper._paged_kv_indptr_buf.data_ptr())
+        # print('paged_kv_indices.data_ptr', attn_metadata.paged_kv_indices.data_ptr())
+        # print('paged_kv_indptr.data_ptr', attn_metadata.paged_kv_indptr.data_ptr())
+        # print('paged_kv_last_page_len.data_ptr', attn_metadata.paged_kv_last_page_len.data_ptr())
+        # print('block_table_bound.data_ptr', attn_metadata.block_table_bound.data_ptr())
+
+        # print('dumping tensors')
+        # print('paged_kv_indices', attn_metadata.paged_kv_indices)
+        # print('paged_kv_indptr', attn_metadata.paged_kv_indptr)
+        # print('paged_kv_last_page_len', attn_metadata.paged_kv_last_page_len)
+        # print('block_table_bound', attn_metadata.block_table_bound)
+
+        # print('print indptr_buf 4.4', model_input.attn_metadata.decode_wrapper._paged_kv_indptr_buf)
         seq_lens = list(map(lambda x: x + 1, model_input.seq_lens))
         bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
 
         # we update next step's attn_metadata
         # model_input.attn_metadata.paged_kv_indptr_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
-        model_input.attn_metadata.paged_kv_indptr_cpu[0][1:] = torch.cumsum(
+        model_input.attn_metadata.paged_kv_indptr_cpu[1:] = torch.cumsum(
             torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
         # model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
-        model_input.attn_metadata.paged_kv_last_page_len_cpu[0].remainder_(self.block_size).add_(1)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu.remainder_(self.block_size).add_(1)
+        # print('print indptr_buf 4.5', model_input.attn_metadata.decode_wrapper._paged_kv_indptr_buf)
 
         new_model_input = self._model_input_cls(
             seq_lens=seq_lens,
