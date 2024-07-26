@@ -363,17 +363,32 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             self.block_tables.extend([[] for _ in range(cuda_graph_pad_size)])
             num_decode_tokens = batch_size
 
+            # The shape of graph_block_tables is
+            # [max batch size, max context len // block size].
+            # input_block_tables = self.runner.graph_block_tables[:batch_size]
+            # for i, block_table in enumerate(self.block_tables):
+            #     if block_table:
+            #         input_block_tables[i, :len(block_table)] = block_table
+            # block_tables = torch.tensor(input_block_tables, device=device)
+
             last_paged_kv_indptr = self.paged_kv_indptr[-1]
             self.paged_kv_indptr.extend([last_paged_kv_indptr] *
                                         cuda_graph_pad_size)
             self.paged_kv_last_page_len.extend([0] * cuda_graph_pad_size)
+            block_tables = make_tensor_with_pad(
+                self.block_tables,
+                pad=0,
+                dtype=torch.int,
+                device=device,
+            )
+        else:
 
-        block_tables = make_tensor_with_pad(
-            self.block_tables,
-            pad=0,
-            dtype=torch.int,
-            device=device,
-        )
+            block_tables = make_tensor_with_pad(
+                self.block_tables,
+                pad=0,
+                dtype=torch.int,
+                device=device,
+            )
         assert max_query_len > 0, ("query_lens: {}".format(query_lens))
 
         seq_lens_tensor = torch.tensor(seq_lens,

@@ -168,6 +168,11 @@ __global__ void advance_step_flashinfer_indices_kernel(
       // paged_kv_indices_ptr[div_ceil(seq_start_loc_ptr[row],block_size) + col] = block_tables_ptr[row * block_tables_stride + col];
       paged_kv_indices_ptr[paged_kv_indptr_ptr[row] + col] = block_tables_ptr[row * block_tables_stride + col];
   }
+  // fill padded seqs with the last valid seq's indptr
+  if (num_queries < row && row <= num_seqs) {
+      paged_kv_indptr_ptr[row] = paged_kv_indptr_ptr[num_queries];
+  }
+
 }
 
 
@@ -240,7 +245,7 @@ void advance_step_flashinfer(int num_seqs, int num_queries, int block_size,
   verify_tensor("block_tables", block_tables, num_seqs, -1, at::kInt);
 
   verify_tensor("paged_kv_indices", paged_kv_indices, -1, -1, at::kInt);
-  verify_tensor("paged_kv_indptr", paged_kv_indptr, -1, -1, at::kInt);
+  verify_tensor("paged_kv_indptr", paged_kv_indptr, num_seqs+1, -1, at::kInt);
   verify_tensor("paged_kv_last_page_len", paged_kv_last_page_len, num_seqs, -1, at::kInt);
 
   verify_tensor("block_table_bound", block_table_bound, num_seqs, -1, at::kInt);

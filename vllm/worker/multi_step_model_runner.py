@@ -266,7 +266,7 @@ class MultiStepModelRunner(ModelRunner):
                     batch_size = model_input.input_tokens.shape[0]
                     model_input.attn_metadata.decode_wrapper = self.graph_runners[
                         model_input.
-                        virtual_engine][batch_size].flashinfer_decode_wrappers[idx]
+                        virtual_engine][batch_size].flashinfer_decode_wrappers[0]
                 else:
                     model_input.attn_metadata.decode_wrapper = \
                         self.flashinfer_decode_wrappers[idx]
@@ -358,8 +358,10 @@ class MultiStepModelRunner(ModelRunner):
                 out = self._get_sampled_token_ids(model_outputs)
 
                 # FIXME debugging cuda event synchronization
-                self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
                 # print('before sync')
+                # torch.cuda.synchronize()
+                # print('2before sync')
+                self.step_cuda_events[(idx+1)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
                 # self.step_cuda_events[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].synchronize()
                 # print('after sync')
                 # model_input = self._advance_step_flashinfer_gpu(model_input, out, idx+1)
@@ -565,8 +567,10 @@ class MultiStepModelRunner(ModelRunner):
         num_queries = len(model_input.query_lens)
         # print('num_seqs', num_seqs)
         # print('num_queries', num_queries)
-        num_queries = num_seqs
+        # num_queries = num_seqs
         # assert num_seqs == num_queries
+        # if num_seqs != num_queries:
+        #     print('SEARCH')
         attn_metadata = model_input.attn_metadata
         # Update GPU tensors
         attn_metadata.seq_start_loc = None
@@ -599,6 +603,16 @@ class MultiStepModelRunner(ModelRunner):
         # print('first sync')
         # torch.cuda.synchronize(self.device)
         # print('after first sync')
+        # print('model_input.attn_metadata.paged_kv_indptr_cpu', model_input.attn_metadata.paged_kv_indptr_cpu)
+        # print('model_input.attn_metadata.paged_kv_indptr', model_input.attn_metadata.paged_kv_indptr)
+        # print('model_input.attn_metadata.paged_kv_indptr_cpu', model_input.attn_metadata.paged_kv_indptr_cpu.shape)
+        # print('model_input.attn_metadata.paged_kv_indptr', model_input.attn_metadata.paged_kv_indptr.shape)
+
+        # print('model_input.attn_metadata.paged_kv_last_page_len_cpu', model_input.attn_metadata.paged_kv_last_page_len_cpu)
+        # print('model_input.attn_metadata.paged_kv_last_page_len', model_input.attn_metadata.paged_kv_last_page_len)
+        # print('model_input.attn_metadata.paged_kv_last_page_len_cpu', model_input.attn_metadata.paged_kv_last_page_len_cpu.shape)
+        # print('model_input.attn_metadata.paged_kv_last_page_len', model_input.attn_metadata.paged_kv_last_page_len.shape)
+        # print('------')
         ops.advance_step_flashinfer(
             num_seqs=num_seqs,
             num_queries=num_queries,
@@ -632,19 +646,34 @@ class MultiStepModelRunner(ModelRunner):
         # print('block_table_bound', attn_metadata.block_table_bound)
 
         # print('print indptr_buf 4.4', model_input.attn_metadata.decode_wrapper._paged_kv_indptr_buf)
-        seq_lens = list(map(lambda x: x + 1, model_input.seq_lens))
-        bounds = list(map(lambda x: -(x//-self.block_size), seq_lens))
+
+        #only add 1 to the first query_len of seq_lens
+        # print('seq_lens', model_input.seq_lens)
+        model_input.seq_lens[:query_len] = [x + 1 for x in model_input.seq_lens[:query_len]]
+
+        bounds = list(map(lambda x: -(x//-self.block_size), model_input.seq_lens[:query_len]))
 
         # we update next step's attn_metadata
         # model_input.attn_metadata.paged_kv_indptr_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS][1:] = torch.cumsum(
-        model_input.attn_metadata.paged_kv_indptr_cpu[1:] = torch.cumsum(
+        model_input.attn_metadata.paged_kv_indptr_cpu[1:query_len+1] = torch.cumsum(
             torch.tensor(bounds, device='cpu'), dtype=torch.int, dim=0)
+        last_indptr = model_input.attn_metadata.paged_kv_indptr_cpu[query_len]
+        model_input.attn_metadata.paged_kv_indptr_cpu[query_len+1:] = last_indptr
         # model_input.attn_metadata.paged_kv_last_page_len_cpu[(idx)%NUM_FLASHINFER_WORKSPACE_BUFFERS].remainder_(self.block_size).add_(1)
-        model_input.attn_metadata.paged_kv_last_page_len_cpu.remainder_(self.block_size).add_(1)
+        model_input.attn_metadata.paged_kv_last_page_len_cpu[:query_len].remainder_(self.block_size).add_(1)
         # print('print indptr_buf 4.5', model_input.attn_metadata.decode_wrapper._paged_kv_indptr_buf)
+        # print('model_input.attn_metadata.paged_kv_indptr_cpu', model_input.attn_metadata.paged_kv_indptr_cpu)
+        # print('model_input.attn_metadata.paged_kv_indptr', model_input.attn_metadata.paged_kv_indptr)
+        # print('model_input.attn_metadata.paged_kv_indptr_cpu', model_input.attn_metadata.paged_kv_indptr_cpu.shape)
+        # print('model_input.attn_metadata.paged_kv_indptr', model_input.attn_metadata.paged_kv_indptr.shape)
+
+        # print('model_input.attn_metadata.paged_kv_last_page_len_cpu', model_input.attn_metadata.paged_kv_last_page_len_cpu)
+        # print('model_input.attn_metadata.paged_kv_last_page_len', model_input.attn_metadata.paged_kv_last_page_len)
+        # print('model_input.attn_metadata.paged_kv_last_page_len_cpu', model_input.attn_metadata.paged_kv_last_page_len_cpu.shape)
+        # print('model_input.attn_metadata.paged_kv_last_page_len', model_input.attn_metadata.paged_kv_last_page_len.shape)
 
         new_model_input = self._model_input_cls(
-            seq_lens=seq_lens,
+            seq_lens=model_input.seq_lens,
             input_tokens=model_input.input_tokens,
             input_positions=model_input.input_positions,
             attn_metadata=attn_metadata,
