@@ -1346,7 +1346,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 batch_size = model_input.input_tokens.shape[0]
                 model_input.attn_metadata.decode_wrapper = self.graph_runners[
                     model_input.
-                    virtual_engine][batch_size].flashinfer_decode_wrapper
+                    virtual_engine][batch_size].flashinfer_decode_wrappers[0]
             else:
                 model_input.attn_metadata.decode_wrapper = \
                     self.flashinfer_decode_wrapper
