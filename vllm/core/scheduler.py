@@ -1040,6 +1040,29 @@ class Scheduler:
                 remaining.append(seq_group)
         self.running = remaining
 
+    def should_run_scheduler(
+        self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
+    ) -> bool:
+        if seq_group_metadata_list is None:
+            return True
+        # TODO(will) this is a sanity check for nowto make sure that all the
+        # seqs are on the same steps. Eventually we will want to do some sort of
+        # dynamic scheduling when doing multi-step decoding.
+        if len(seq_group_metadata_list) == 0:
+            return True
+        steps_remaining = [
+            seq_group.remaining_steps for seq_group in seq_group_metadata_list
+        ]
+        if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
+            raise AssertionError(
+                "All running sequence groups should have the same remaining steps."
+            )
+
+        if any(seq_group.remaining_steps > 0
+               for seq_group in seq_group_metadata_list):
+            return False
+        return True
+
     def _allocate_and_set_running(self, seq_group: SequenceGroup) -> None:
         self.block_manager.allocate(seq_group)
         for seq in seq_group.get_seqs(status=SequenceStatus.WAITING):
@@ -1062,6 +1085,7 @@ class Scheduler:
                 slots.
         """
         num_lookahead_slots = self._get_num_lookahead_slots(is_prefill=False)
+        seq_group.init_multi_step(num_lookahead_slots=num_lookahead_slots)
 
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             cows = self.block_manager.append_slots(seq, num_lookahead_slots)
