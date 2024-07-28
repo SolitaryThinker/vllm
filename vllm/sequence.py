@@ -480,6 +480,17 @@ class Sequence:
                 f"num_blocks={self.n_blocks}, ")
 
 
+@dataclass
+class SequenceGroupState:
+    """Mutable state tied to a specific sequence group"""
+
+    # for multi-step decoding
+    num_lookahead_slots: int = 0
+    num_steps: int = 1
+    remaining_steps: int = 0
+    current_step: int = 0
+
+
 class SequenceGroup:
     """A group of sequences that are generated from the same prompt.
 
@@ -576,6 +587,28 @@ class SequenceGroup:
     def prompt_adapter_num_virtual_tokens(self) -> int:
         return self.prompt_adapter_request.prompt_adapter_num_virtual_tokens\
                          if self.prompt_adapter_request else 0
+
+    @property
+    def num_lookahead_slots(self) -> int:
+        return self.state.num_lookahead_slots
+
+    @property
+    def num_steps(self) -> int:
+        return self.state.num_steps
+
+    @property
+    def remaining_steps(self) -> int:
+        return self.state.remaining_steps
+
+    @property
+    def current_step(self) -> int:
+        return self.state.current_step
+
+    def init_multi_step(self, num_lookahead_slots: int) -> None:
+        self.state.num_lookahead_slots = num_lookahead_slots
+        self.state.num_steps = num_lookahead_slots + 1
+        self.state.remaining_steps = num_lookahead_slots + 1
+        self.state.current_step = 0
 
     def get_last_latency(self, now: float) -> Optional[float]:
         """Sets the last token time for Request level timings."""
@@ -768,6 +801,11 @@ class SequenceGroupMetadata:
         self.cross_block_table = cross_block_table
         self._token_chunk_size = token_chunk_size
         self.do_sample = do_sample
+
+        # these may need to be a queue
+        sampler_output_ready_event: torch.cuda.Event = None
+        pythonized_sampler_output: Optional[SamplerOutput] = None
+        pythonized = False
 
         # The number of speculative tokens adopted in this request.
         # None means specuative decoding is not used.

@@ -242,6 +242,12 @@ class RequestTracker:
 class _AsyncLLMEngine(LLMEngine):
     """Extension of LLMEngine to add async methods."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        pipeline_parallel_size = \
+            self.parallel_config.pipeline_parallel_size
+        self.cached_scheduler_outputs = [(None, None)] * pipeline_parallel_size
+
     async def step_async(
         self, virtual_engine: int
     ) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
@@ -254,13 +260,25 @@ class _AsyncLLMEngine(LLMEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
-        seq_group_metadata_list, scheduler_outputs = self.scheduler[
-            virtual_engine].schedule()
+        seq_group_metadata_list, scheduler_outputs = self.cached_scheduler_outputs[
+            virtual_engine]
+        if self.scheduler[virtual_engine].should_run_scheduler(
+                seq_group_metadata_list):
+            seq_group_metadata_list, scheduler_outputs = self.scheduler[
+                virtual_engine].schedule()
+
+            if scheduler_outputs.num_lookahead_slots > 0:
+                self.cached_scheduler_outputs[virtual_engine] = (
+                    seq_group_metadata_list, scheduler_outputs)
+
+        assert seq_group_metadata_list is not None
+        assert scheduler_outputs is not None
 
         if not scheduler_outputs.is_empty():
             # Execute the model.
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
+            # perhaps find the min num_lookahead_slots from all seq groups
             execute_model_req = ExecuteModelRequest(
                 seq_group_metadata_list=seq_group_metadata_list,
                 blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
