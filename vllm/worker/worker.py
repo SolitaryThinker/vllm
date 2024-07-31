@@ -107,6 +107,21 @@ class Worker(LocalOrDistributedWorkerBase):
         # Initialize gpu_cache as embedding models don't initialize kv_caches
         self.gpu_cache: Optional[List[List[torch.Tensor]]] = None
 
+        self.profiler = torch.profiler.profile(
+                    activities=[
+                        torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA,
+                    ],
+                    with_stack=True,
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                        str('/mnt/user_storage/traces/'), use_gzip=True))
+        
+    def start_profile(self):
+        self.profiler.start()
+
+    def stop_profile(self):
+        self.profiler.stop()
+
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until
