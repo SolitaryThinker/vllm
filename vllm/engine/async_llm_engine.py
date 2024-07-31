@@ -439,6 +439,12 @@ class AsyncLLMEngine:
         # Lazy initialized fields
         self._request_tracker: RequestTracker
 
+    def start_profile(self):
+        self.engine.model_executor._run_workers('start_profile')
+        
+    def stop_profile(self):
+        self.engine.model_executor._run_workers('stop_profile')
+
     @classmethod
     def _get_executor_cls(
             cls, engine_config: EngineConfig) -> Type[ExecutorAsyncBase]:
