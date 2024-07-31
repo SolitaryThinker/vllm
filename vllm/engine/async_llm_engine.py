@@ -23,7 +23,7 @@ from vllm.outputs import EmbeddingRequestOutput, RequestOutput
 from vllm.pooling_params import PoolingParams
 from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import SamplingParams
-from vllm.sequence import ExecuteModelRequest, SamplerOutput
+from vllm.sequence import ExecuteModelRequest, SamplerOutput, SequenceGroupMetadata
 from vllm.usage.usage_lib import UsageContext
 
 logger = init_logger(__name__)
@@ -241,10 +241,11 @@ class _AsyncLLMEngine(LLMEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
+        is_first_multi_step = False
         seq_group_metadata_list, scheduler_outputs = self.cached_scheduler_outputs[
             virtual_engine]
-        if self.scheduler[virtual_engine].should_run_scheduler(
-                seq_group_metadata_list):
+        if not self._has_remaining_steps(seq_group_metadata_list):
+            is_first_multi_step = True
             seq_group_metadata_list, scheduler_outputs = self.scheduler[
                 virtual_engine].schedule()
 
@@ -274,9 +275,16 @@ class _AsyncLLMEngine(LLMEngine):
         else:
             output = []
 
-        request_outputs = self._process_model_outputs(
-            output, scheduler_outputs.scheduled_seq_groups,
-            scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
+        # assert len(seq_group_metadata_list) > 0
+        for seq_group in seq_group_metadata_list:
+            seq_group.finish_step()
+        # TODO: skip this if not at end of multi-step
+        if not self._has_remaining_steps(seq_group_metadata_list):
+            request_outputs = self._process_model_outputs(
+                output, scheduler_outputs.scheduled_seq_groups,
+                scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
+        else:
+            request_outputs = []
 
         # Log stats.
         self.do_log_stats(scheduler_outputs, output)
@@ -285,6 +293,29 @@ class _AsyncLLMEngine(LLMEngine):
         self.do_tracing(scheduler_outputs)
 
         return request_outputs
+
+    def _has_remaining_steps(
+        self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
+    ) -> bool:
+        if seq_group_metadata_list is None:
+            return False
+        # TODO(will) this is a sanity check for nowto make sure that all the
+        # seqs are on the same steps. Eventually we will want to do some sort of
+        # dynamic scheduling when doing multi-step decoding.
+        if len(seq_group_metadata_list) == 0:
+            return False
+        steps_remaining = [
+            seq_group.remaining_steps for seq_group in seq_group_metadata_list
+        ]
+        if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
+            raise AssertionError(
+                "All running sequence groups should have the same remaining steps."
+            )
+
+        if any(seq_group.remaining_steps > 0
+               for seq_group in seq_group_metadata_list):
+            return True
+        return False
 
     async def stop_remote_worker_execution_loop_async(self) -> None:
         """Stop the remote worker execution loop."""
