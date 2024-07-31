@@ -503,22 +503,6 @@ class SequenceGroup:
         return self.prompt_adapter_request.prompt_adapter_num_virtual_tokens\
                          if self.prompt_adapter_request else 0
 
-    @property
-    def num_lookahead_slots(self) -> int:
-        return self.state.num_lookahead_slots
-
-    @property
-    def num_steps(self) -> int:
-        return self.state.num_steps
-
-    @property
-    def remaining_steps(self) -> int:
-        return self.state.remaining_steps
-
-    @property
-    def current_step(self) -> int:
-        return self.state.current_step
-
     def init_multi_step(self, num_lookahead_slots: int) -> None:
         self.state.num_lookahead_slots = num_lookahead_slots
         self.state.num_steps = num_lookahead_slots + 1
@@ -717,11 +701,6 @@ class SequenceGroupMetadata:
         self._token_chunk_size = token_chunk_size
         self.do_sample = do_sample
 
-        # these may need to be a queue
-        sampler_output_ready_event: torch.cuda.Event = None
-        pythonized_sampler_output: Optional[SamplerOutput] = None
-        pythonized = False
-
         # The number of speculative tokens adopted in this request.
         # None means specuative decoding is not used.
         # Zero means speculative decoding is disabled for some reasons.
@@ -753,6 +732,33 @@ class SequenceGroupMetadata:
         """Return the number of tokens to be processed (chunk size)."""
         assert self._token_chunk_size is not None
         return self._token_chunk_size
+
+    @property
+    def num_lookahead_slots(self) -> int:
+        return self.state.num_lookahead_slots
+
+    @property
+    def num_steps(self) -> int:
+        return self.state.num_steps
+
+    @property
+    def remaining_steps(self) -> int:
+        return self.state.remaining_steps
+
+    @property
+    def current_step(self) -> int:
+        return self.state.current_step
+
+    @property
+    def is_first_multi_step(self) -> bool:
+        return self.state.current_step == 0
+
+    def finish_step(self) -> None:
+        assert self.state.current_step < self.state.num_steps
+        self.state.current_step += 1
+        self.state.remaining_steps -= 1
+        assert self.state.remaining_steps >= 0
+        self.state.remaining_steps = max(0, self.state.remaining_steps)
 
 
 class SequenceOutput:
@@ -1025,6 +1031,26 @@ class ExecuteModelRequest:
     num_steps: int = 1
     # Finished request ids since last step.
     finished_requests_ids: List[str] = field(default_factory=list)
+
+    @property
+    def is_first_multi_step(self) -> bool:
+        # TODO make this be able to handle batches with variable number of steps
+        assert len(self.seq_group_metadata_list) > 0
+        first_seq_group = self.seq_group_metadata_list[0]
+        return first_seq_group.is_first_multi_step
+
+    @property
+    def is_last_step(self) -> bool:
+        # TODO make this be able to handle batches with variable number of steps
+        assert len(self.seq_group_metadata_list) > 0
+        first_seq_group = self.seq_group_metadata_list[0]
+        return first_seq_group.state.remaining_steps == 1
+
+    @property
+    def current_step(self) -> int:
+        # TODO make this be able to handle batches with variable number of steps
+        assert len(self.seq_group_metadata_list) > 0
+        return self.seq_group_metadata_list[0].current_step
 
     def clone(
         self, seq_group_metadata_list: List[SequenceGroupMetadata]
