@@ -91,7 +91,7 @@ class EngineArgs:
     lora_dtype: str = 'auto'
     max_cpu_loras: Optional[int] = None
     device: str = 'auto'
-    max_forward_calls_per_step: int = 1,
+    max_forward_calls_per_step: int = 1
     ray_workers_use_nsight: bool = False
     num_gpu_blocks_override: Optional[int] = None
     num_lookahead_slots: int = 0

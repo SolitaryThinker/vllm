@@ -751,6 +751,9 @@ class Scheduler:
                 curr_loras.add(lora_int_id)
             waiting_queue.popleft()
             self._allocate_and_set_running(seq_group)
+            seq_group.init_multi_step(
+                num_lookahead_slots=self._get_num_lookahead_slots(
+                    is_prefill=True))
             seq_groups.append(
                 ScheduledSequenceGroup(seq_group=seq_group,
                                        token_chunk_size=num_new_tokens))
@@ -1067,29 +1070,6 @@ class Scheduler:
             else:
                 remaining.append(seq_group)
         self.running = remaining
-
-    def should_run_scheduler(
-        self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
-    ) -> bool:
-        if seq_group_metadata_list is None:
-            return True
-        # TODO(will) this is a sanity check for nowto make sure that all the
-        # seqs are on the same steps. Eventually we will want to do some sort of
-        # dynamic scheduling when doing multi-step decoding.
-        if len(seq_group_metadata_list) == 0:
-            return True
-        steps_remaining = [
-            seq_group.remaining_steps for seq_group in seq_group_metadata_list
-        ]
-        if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
-            raise AssertionError(
-                "All running sequence groups should have the same remaining steps."
-            )
-
-        if any(seq_group.remaining_steps > 0
-               for seq_group in seq_group_metadata_list):
-            return False
-        return True
 
     def _allocate_and_set_running(self, seq_group: SequenceGroup) -> None:
         self.block_manager.allocate(seq_group)
