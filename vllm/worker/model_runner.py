@@ -1412,10 +1412,10 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             model_input.attn_metadata.begin_forward()
 
         if model_input.is_multi_step:
-            # if model_input.sampling_metadata is not None:
-            model_input.sampling_metadata.skip_sampler_cpu_output = True
-            # self.model.sampler.include_gpu_probs_tensor = True
+            # print(f'=======step {model_input.current_step}=============')
             if self.is_driver_worker and get_pp_group().is_last_rank:
+                self.model.sampler.include_gpu_probs_tensor = True
+                model_input.sampling_metadata.skip_sampler_cpu_output = True
                 for output in model_input.outputs:
                     output.maybe_pythonize(model_input, self._copy_stream)
         current_stream = torch.cuda.current_stream()
@@ -1449,10 +1449,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             **MultiModalInputs.as_kwargs(multi_modal_kwargs,
                                          device=self.device),
             **seqlen_agnostic_kwargs)
-        # torch.cuda.synchronize()
 
         if model_input.is_multi_step:
-            # print(f'=======step {model_input.current_step}=============')
             model_input.record_step_event()
 
         if get_pp_group().is_last_rank:
@@ -1485,8 +1483,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
                     output.hidden_states = hidden_states
 
+        # if model_input.is_multi_step:
+        #     print(f'is_multi_step: {model_input.is_multi_step}')
+        #     print(f'is_last_step: {model_input.is_last_step}')
+        #     print(f'current_step: {model_input.current_step}')
         if model_input.is_multi_step and not model_input.is_last_step:
-            # print('updating step')
             out = self._get_sampled_token_ids(model_input.outputs)
             model_input.wait_previous_step()
             model_input = self._advance_step(model_input, out)
@@ -1498,13 +1499,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         if not self.is_driver_worker:
             return []
 
-        # if model_input.is_multi_step:
-        # print(f'is_multi_step: {model_input.is_multi_step}')
-        # print(f'is_last_step: {model_input.is_last_step}')
-        # print(f'current_step: {model_input.current_step}')
         if model_input.is_multi_step and model_input.is_last_step:
-            # model_input.outputs.append(ModelOutput(output, output.sampler_output_ready_event, None))
-            # print('pythonizing')
             outputs = []
             for output in model_input.outputs:
                 output.pythonize(model_input, self._copy_stream)

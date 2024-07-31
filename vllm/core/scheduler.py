@@ -1030,6 +1030,7 @@ class Scheduler:
                 computed_block_nums=common_computed_block_nums,
                 encoder_seq_data=encoder_seq_data,
                 cross_block_table=cross_block_table,
+                state=seq_group.state,
                 # `multi_modal_data` will only be present for the 1st comm
                 # between engine and worker.
                 # the subsequent comms can still use delta, but
