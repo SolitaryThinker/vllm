@@ -299,27 +299,17 @@ class LocalOrDistributedWorkerBase(WorkerBase):
                 get_pp_group().recv_tensor_dict(
                     all_gather_group=get_tp_group()))
 
-        if not self.is_driver_worker:
-            # get chached metadata from VE
-            pass
-
         output = self.model_runner.execute_model(
             model_input, self.kv_cache[worker_input.virtual_engine]
             if self.kv_cache is not None else None, intermediate_tensors,
             num_steps)
 
+        self._handle_pipeline_parallel_output(model_input, output)
         if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             get_pp_group().send_tensor_dict(output.tensors,
                                             all_gather_group=get_tp_group())
             return [None]
-        else:
-            # make sure we are not last step
-            # broadcast to other ranks
-            get_pp_group().broadcast_tensor_dict(
-                {"sampled_token_ids": model_input.outputs[-1].sampler_output.sampled_token_ids},
-                src=self.parallel_config.pipeline_parallel_size - 1
-            )
 
         # output is List[SamplerOutput]
         return output

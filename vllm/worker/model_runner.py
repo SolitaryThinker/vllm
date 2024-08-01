@@ -1413,32 +1413,37 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
         debug_multi_step = False
         if model_input.is_multi_step and debug_multi_step:
-            print(f'=======step {model_input.current_step} for {model_input.virtual_engine}=============')
+            print(
+                f'=======step {model_input.current_step} for {model_input.virtual_engine}============='
+            )
             print(f'is_multi_step: {model_input.is_multi_step}')
             print(f'is_last_step: {model_input.is_last_step}')
             print(f'current_step: {model_input.current_step}')
             print(f'is_first_multi_step: {model_input.is_first_multi_step}')
 
-
+        # some pre-execute model logic for multi-step:
+        #   - if it's the first step, we need to reset the sampling tensors
+        #   - if it's not the first step, we need to advance the step using the
+        #   appended sampler output from last iteration
+        #   - also maybe pythonize if CPU is ahead of GPU
         if model_input.is_multi_step:
             if model_input.is_first_multi_step:
                 if model_input.sampling_metadata:
                     model_input.sampling_metadata.reuse_sampling_tensors = False
-            if model_input.is_multi_step and not model_input.is_first_multi_step:
-            #     if not get_pp_group().is_last_rank:
-            #         out = self._get_sampled_token_ids_broadcast(len(model_input.seq_lens), model_input.outputs)
-            #     print('advance step1')
-            #     #model_input.wait_previous_step()
-                model_input = self._advance_step(model_input, model_input.outputs[-1].sampler_output)
+            else:
+                model_input.wait_previous_step()
+                model_input = self._advance_step(
+                    model_input, model_input.outputs[-1].sampler_output)
                 if model_input.sampling_metadata:
                     model_input.sampling_metadata.reuse_sampling_tensors = False
-            #     print(f'after advance step: {model_input.current_step}:{model_input.virtual_engine}')
 
+            # make sure we skip the sampler on the lask rank and 
             if self.is_driver_worker and get_pp_group().is_last_rank:
                 self.model.sampler.include_gpu_probs_tensor = True
                 model_input.sampling_metadata.skip_sampler_cpu_output = True
                 for output in model_input.outputs:
                     output.maybe_pythonize(model_input, self._copy_stream)
+
         current_stream = torch.cuda.current_stream()
 
         # Currently cuda graph is only supported by the decode phase.
@@ -1489,10 +1494,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     output_ready_event.record(current_stream)
                     model_input.outputs.append(
                         ModelOutput(output, output_ready_event, None))
-                    # if not (model_input.is_last_step and model_input.current_step==0):
-                        # XXX broadcast from last rank's driver
-                        # pass
-                        # out = self._get_sampled_token_ids_broadcast(len(model_input.seq_lens), model_input.outputs)
+
                 if self.return_hidden_states:
                     # we only need to pass hidden states of most recent token
                     assert model_input.sampling_metadata is not None
@@ -1508,15 +1510,6 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
                     output.hidden_states = hidden_states
 
-
-        # if model_input.is_multi_step and not model_input.is_last_step:
-            # print('advance step')
-            # if not get_pp_group().is_last_rank:
-                # out = self._get_sampled_token_ids_broadcast(len(model_input.seq_lens), model_input.outputs)
-            # print('advance step1')
-            #model_input.wait_previous_step()
-            # model_input = self._advance_step(model_input, out)
-            # print(f'after advance step: {model_input.current_step}:{model_input.virtual_engine}')
         if model_input.is_multi_step:
             model_input.current_step += 1
 
@@ -1621,103 +1614,6 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             model_input.seq_lens[i] = attn_metadata.seq_lens[i]
 
         return model_input
-
-    def _get_sampled_token_ids_broadcast(
-            self, num_seqs: int,model_outputs: List[ModelOutput]) -> SamplerOutput:
-        if get_pp_group().is_last_rank:
-            # broadcast the sampled token to all pp stages
-            if self.is_driver_worker:
-                last_output = model_outputs[-1].sampler_output
-                # print('broadcasting from last rank driver')
-                # print('sampled_token_ids', last_output.sampled_token_ids.shape)
-                pp_group = get_pp_group()
-                pp_group.broadcast(
-                    last_output.sampled_token_ids,
-                    src=pp_group.world_size - 1,
-                    async_op=True)
-                # print('done pp broadcasting from last rank driver')
-
-                get_tp_group().broadcast(
-                    last_output.sampled_token_ids,
-                    src=get_tp_group().first_rank,
-                    async_op=True)
-                out = last_output
-                # print('done tp broadcasting from last rank driver')
-            else:
-                # print('broadcasting from last rank worker')
-                output_dict = get_tp_group().broadcast()
-                # src=get_tp_group().first_rank)
-                out = SamplerOutput(
-                    [], sampled_token_ids=output_dict["sampled_token_ids"])
-                # print('done broadcasting from last rank worker')
-
-            # model_input = self._advance_step(model_input, out)
-        else:
-            # get next token from broadcast
-            # print('before  recv broadcasting from non last rank')
-            if self.is_driver_worker:
-                # print('num_seqs', num_seqs)
-                sampled_token_ids = torch.empty((num_seqs, 1), device='cuda')
-                pp_group = get_pp_group()
-                output_dict = pp_group.broadcast(
-                    sampled_token_ids,
-                    src=pp_group.world_size - 1,
-                    async_op=True)
-                get_tp_group().broadcast(
-                    sampled_token_ids,
-                    src=get_tp_group().first_rank,
-                    async_op=True)
-            else:
-                output_dict = get_tp_group().broadcast()
-            # print('after   recv broadcasting from non last rank')
-            out = SamplerOutput(
-                [], sampled_token_ids=sampled_token_ids)
-        return out
-
-    def _get_sampled_token_ids(
-            self, model_outputs: List[ModelOutput]) -> SamplerOutput:
-        if get_pp_group().is_last_rank:
-            # broadcast the sampled token to all pp stages
-            if self.is_driver_worker:
-                last_output = model_outputs[-1].sampler_output
-                print('broadcasting from last rank driver')
-                print('sampled_token_ids', last_output.sampled_token_ids.shape)
-                pp_group = get_pp_group()
-                pp_group.broadcast_tensor_dict(
-                    {"sampled_token_ids": last_output.sampled_token_ids},
-                    src=pp_group.world_size - 1)
-
-                get_tp_group().broadcast_tensor_dict(
-                    {"sampled_token_ids": last_output.sampled_token_ids})
-                out = last_output
-                print('done broadcasting from last rank driver')
-            else:
-                print('broadcasting from last rank worker')
-                output_dict = get_tp_group().broadcast_tensor_dict()
-                # src=get_tp_group().first_rank)
-                out = SamplerOutput(
-                    [], sampled_token_ids=output_dict["sampled_token_ids"])
-                print('done broadcasting from last rank worker')
-
-            # model_input = self._advance_step(model_input, out)
-        else:
-            # get next token from broadcast
-            print('before  recv broadcasting from non last rank')
-            if self.is_driver_worker:
-                pp_group = get_pp_group()
-                output_dict = pp_group.broadcast_tensor_dict(
-                    src=pp_group.world_size - 1)
-                get_tp_group().broadcast_tensor_dict(
-                    {"sampled_token_ids": output_dict["sampled_token_ids"]})
-                # get_tp_group().broadcast_tensor_dict(
-                #     {"sampled_token_ids": torch.tensor([42])})
-            else:
-                output_dict = get_tp_group().broadcast_tensor_dict()
-            print('after   recv broadcasting from non last rank')
-            out = SamplerOutput(
-                [], sampled_token_ids=output_dict["sampled_token_ids"])
-        return out
-
 
 class CUDAGraphRunner:
 

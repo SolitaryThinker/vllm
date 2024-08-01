@@ -461,7 +461,7 @@ class AsyncLLMEngine:
 
     def start_profile(self):
         self.engine.model_executor._run_workers('start_profile')
-        
+
     def stop_profile(self):
         self.engine.model_executor._run_workers('stop_profile')
 
