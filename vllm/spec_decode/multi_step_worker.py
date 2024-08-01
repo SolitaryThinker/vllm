@@ -42,14 +42,6 @@ class MultiStepWorker(Worker, ProposerWorkerBase):
             max_proposal_len=self.max_model_len,
         )
 
-    def set_include_gpu_probs_tensor(self) -> None:
-        # Need include_gpu_probs_tensor for MultiStepWorker
-        self.model_runner.model.sampler.include_gpu_probs_tensor = True
-
-    def set_should_modify_greedy_probs_inplace(self) -> None:
-        self.model_runner.model.sampler.should_modify_greedy_probs_inplace = (
-            True)
-
     @torch.inference_mode()
     def sampler_output(
         self,

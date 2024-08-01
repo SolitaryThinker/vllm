@@ -95,6 +95,16 @@ class WorkerBase(ABC):
     @abstractmethod
     def list_loras(self) -> Set[int]:
         raise NotImplementedError
+    
+    @abstractmethod
+    def set_include_gpu_probs_tensor(self) -> None:
+        """Implementation optional"""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_should_modify_greedy_probs_inplace(self) -> None:
+        """Implementation optional"""
+        raise NotImplementedError
 
 
 class LoraNotSupportedWorkerBase(WorkerBase):
@@ -114,6 +124,13 @@ class LoraNotSupportedWorkerBase(WorkerBase):
 
     def list_loras(self) -> Set[int]:
         raise ValueError(f"{type(self)} does not support LoRA")
+
+    def set_include_gpu_probs_tensor(self) -> None:
+        self.model_runner.sampler.model.include_gpu_probs_tensor = True
+
+    def set_should_modify_greedy_probs_inplace(self) -> None:
+        self.model_runner.sampler.model.should_modify_greedy_probs_inplace = True
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -308,6 +325,12 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         return self.model_runner.execute_model(
             model_input, self.kv_cache[worker_input.virtual_engine]
             if self.kv_cache is not None else None)
+
+    def set_include_gpu_probs_tensor(self) -> None:
+        self.model_runner.sampler.model.include_gpu_probs_tensor = True
+
+    def set_should_modify_greedy_probs_inplace(self) -> None:
+        self.model_runner.sampler.model.should_modify_greedy_probs_inplace = True
 
 
 class WorkerWrapperBase:
