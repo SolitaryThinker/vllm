@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from vllm.worker.worker import WorkerInput
 from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
                                       ModelRunnerInputBase, ModelOutput)
-from vllm.sequence import ExecuteModelRequest
-from vllm.distributed import broadcast_tensor_dict
+from vllm.sequence import ExecuteModelRequest, SamplerOutput
+from vllm.distributed import broadcast_tensor_dict, get_tp_group
 from typing import Tuple, Optional, List
 import dataclasses
 from dataclasses import field
@@ -26,6 +26,7 @@ class ModelInputForGPUWithMultiStepMetadata(
         self.outputs = kwargs.pop('outputs', [])
         self.is_multi_step = kwargs.pop('is_multi_step', False)
         self.is_last_step = kwargs.pop('is_last_step', False)
+        self.is_first_multi_step = kwargs.pop('is_first_multi_step', False)
         self.step_cuda_events = [torch.cuda.Event(blocking=True)] * 2
         super().__init__(*args, **kwargs)
 
@@ -37,6 +38,14 @@ class ModelInputForGPUWithMultiStepMetadata(
     def wait_previous_step(self):
         self.step_cuda_events[(self.current_step + 1) % 2].wait()
 
+    def add_sampler_output(self, sampler_output: SamplerOutput):
+        self.outputs.append(
+            ModelOutput(
+                sampler_output=sampler_output,
+                sampler_output_ready_event=None,
+                pythonized=False
+            )
+        )
     # @property
     # def is_multi_step(self):
     #     return self.seq_group_metadata_list[0].is_first_multi_step
@@ -56,27 +65,6 @@ class MultiStepWorker(Worker):
         self.multi_step_states: List[
             Optional[MultiStepState]] = [None] * pipeline_parallel_size
 
-    # def _get_driver_input_and_broadcast(
-    #     self, execute_model_req: ExecuteModelRequest
-    # ) -> Tuple[ModelRunnerInputBase, WorkerInput]:
-    #     """
-    #     Get the driver input and broadcast it to other workers.
-    #     """
-    #     assert self.is_driver_worker
-    #     worker_input: WorkerInput = self.prepare_worker_input(
-    #         execute_model_req=execute_model_req)
-    #     model_input: ModelRunnerInputBase = (
-    #         self.model_runner.prepare_model_input(
-    #             execute_model_req.seq_group_metadata_list,
-    #             execute_model_req.virtual_engine,
-    #             execute_model_req.finished_requests_ids))
-
-    #     if self.do_metadata_broadcast:
-    #         broadcast_data = worker_input.as_broadcastable_tensor_dict()
-    #         broadcast_data.update(model_input.as_broadcastable_tensor_dict())
-    #         broadcast_tensor_dict(broadcast_data, src=0)
-
-    #     return model_input, worker_input
 
     def prepare_input(
         self,
@@ -108,13 +96,16 @@ class MultiStepWorker(Worker):
                     outputs=[],
                     is_multi_step=True,
                     is_last_step=execute_model_req.is_last_step,
+                    is_first_multi_step=True,
                 )
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
             else:
-                # model_input, worker_input = self._get_driver_input_and_broadcast(execute_model_req)
+                # get_tp_group().broadcast_object({'virtual_engine': virtual_engine}, src=0)
                 multi_step_state = self.multi_step_states[virtual_engine]
                 model_input = multi_step_state.model_input
+                worker_input = multi_step_state.worker_input
+
                 assert model_input.current_step == execute_model_req.current_step
                 model_input = dataclasses.replace(
                     model_input,
@@ -122,28 +113,33 @@ class MultiStepWorker(Worker):
                     outputs=multi_step_state.model_input.outputs,
                     is_multi_step=True,
                     is_last_step=execute_model_req.is_last_step,
+                    is_first_multi_step=False,
                 )
-                worker_input = multi_step_state.worker_input
+                if self.do_metadata_broadcast:
+                    broadcast_data = worker_input.as_broadcastable_tensor_dict()
+                    broadcast_data.update(model_input.as_broadcastable_tensor_dict())
+                    broadcast_tensor_dict(broadcast_data, src=0)
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
                 assert isinstance(model_input,
                                   ModelInputForGPUWithMultiStepMetadata)
         else:
-            assert False
-            if self.multi_step_states[virtual_engine].is_first_multi_step:
-                model_input, worker_input = self._get_worker_input_from_broadcast(
-                )
+            model_input, worker_input = self._get_worker_input_from_broadcast(
+            )
+            if self.model_input.is_first_multi_step:
                 model_input = ModelInputForGPUWithMultiStepMetadata(
                     **model_input.__dict__,
-                    num_steps=worker_input.num_steps,
+                    num_steps=0,
                     outputs=[],
                     is_multi_step=True,
-                    is_last_step=execute_model_req.is_last_step,
+                    is_last_step=False,
                 )
                 virtual_engine = worker_input.virtual_engine
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
             else:
+                # output = get_tp_group().broadcast_object({'virtual_engine': virtual_engine}, src=0)
+                # virtual_engine = output['virtual_engine']
                 multi_step_state = self.multi_step_states[virtual_engine]
                 model_input = multi_step_state.model_input
                 worker_input = multi_step_state.worker_input
@@ -151,6 +147,8 @@ class MultiStepWorker(Worker):
                                   ModelInputForGPUWithMultiStepMetadata)
                 assert model_input.num_steps == worker_input.num_steps
                 # input should be cached and ready to go already.
+                self.multi_step_states[virtual_engine] = MultiStepState(
+                    worker_input, model_input)
 
         assert model_input is not None
         assert worker_input is not None
