@@ -29,6 +29,12 @@ class AsyncEngineClient(Protocol):
     @property
     def errored(self) -> bool:
         ...
+    
+    async def start_profile(self) -> None:
+        """Start profiling the engine"""
+
+    async def stop_profile(self) -> None:
+        """Start profiling the engine"""
 
     async def generate(
         self,

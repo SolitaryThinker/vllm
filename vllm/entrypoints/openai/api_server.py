@@ -183,20 +183,19 @@ async def show_version():
     ver = {"version": VLLM_VERSION}
     return JSONResponse(content=ver)
 
+
 @router.post("/start_profile")
 async def start_profile():
-    engine.start_profile()
+    await async_engine_client.start_profile()
     print('Profile started')
-    return JSONResponse(content={"message": "Profile started"})
+    return Response(status_code=200)
 
 
 @router.post("/stop_profile")
 async def stop_profile():
-    engine.stop_profile()
+    await async_engine_client.stop_profile()
     print('Profile stopped')
-    return JSONResponse(content={"message": "Profile stopped"})
-
-
+    return Response(status_code=200)
 
 
 @router.post("/v1/chat/completions")

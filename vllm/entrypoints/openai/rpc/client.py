@@ -241,7 +241,27 @@ class AsyncEngineRPCClient:
         if health_message != VLLM_RPC_HEALTHY_STR:
             raise ValueError("Expected healthy response from backend but got "
                              "f{health_message}")
-
+    
+    async def start_profile(self) -> None:
+        """Start profiling the engine"""
+    
+        with self.socket() as socket:
+    
+            # Ping RPCServer with START_PROFILE request.
+            await socket.send(cloudpickle.dumps(RPCUtilityRequest.START_PROFILE))
+            # health_message = cloudpickle.loads(await socket.recv())
+        # print(health_message)
+    
+    async def stop_profile(self) -> None:
+        """Start profiling the engine"""
+    
+        with self.socket() as socket:
+    
+            # Ping RPCServer with STOP_PROFILE request.
+            await socket.send(cloudpickle.dumps(RPCUtilityRequest.STOP_PROFILE))
+            # health_message = cloudpickle.loads(await socket.recv())
+        # print(health_message)
+    
     async def encode(self, *args,
                      **kwargs) -> AsyncIterator[EmbeddingRequestOutput]:
         raise NotImplementedError(

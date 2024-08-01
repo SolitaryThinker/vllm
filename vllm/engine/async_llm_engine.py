@@ -249,7 +249,7 @@ class _AsyncLLMEngine(LLMEngine):
             seq_group_metadata_list, scheduler_outputs = self.scheduler[
                 virtual_engine].schedule()
 
-            if scheduler_outputs.num_lookahead_slots > 0:
+            if not scheduler_outputs.is_empty() and scheduler_outputs.num_lookahead_slots > 0:
                 self.cached_scheduler_outputs[virtual_engine] = (
                     seq_group_metadata_list, scheduler_outputs)
 
@@ -276,8 +276,9 @@ class _AsyncLLMEngine(LLMEngine):
             output = []
 
         # assert len(seq_group_metadata_list) > 0
-        for seq_group in seq_group_metadata_list:
-            seq_group.finish_step()
+        if not scheduler_outputs.is_empty():
+            for seq_group in seq_group_metadata_list:
+                seq_group.finish_step()
         # TODO: skip this if not at end of multi-step
         if not self._has_remaining_steps(seq_group_metadata_list):
             request_outputs = self._process_model_outputs(
@@ -442,7 +443,7 @@ class AsyncLLMEngine:
 
     def start_profile(self):
         self.engine.model_executor._run_workers('start_profile')
-        
+
     def stop_profile(self):
         self.engine.model_executor._run_workers('stop_profile')
 

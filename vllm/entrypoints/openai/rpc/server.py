@@ -105,6 +105,24 @@ class AsyncEngineRPCServer:
             cloudpickle.dumps(VLLM_RPC_SUCCESS_STR),
         ])
 
+    async def start_profile(self,identity):
+        try:
+            print('start_profile')
+            await self.engine.start_profile()
+            # await self.socket.send_multipart(
+            #     [identity, cloudpickle.dumps(VLLM_RPC_HEALTHY_STR)])
+        except Exception as e:
+            await self.socket.send_multipart([identity, cloudpickle.dumps(e)])
+    
+    async def stop_profile(self,identity):
+        try:
+            print('stop_profile')
+            await self.engine.stop_profile()
+            # await self.socket.send_multipart(
+            #     [identity, cloudpickle.dumps(VLLM_RPC_HEALTHY_STR)])
+        except Exception as e:
+            await self.socket.send_multipart([identity, cloudpickle.dumps(e)])
+    
     async def generate(self, identity, generate_request: RPCGenerateRequest):
         try:
             results_generator = self.engine.generate(
@@ -162,6 +180,10 @@ class AsyncEngineRPCServer:
                 return self.check_health(identity)
             elif request == RPCUtilityRequest.IS_TRACING_ENABLED:
                 return self.is_tracing_enabled(identity)
+            elif request == RPCUtilityRequest.START_PROFILE:
+                return self.start_profile(identity)
+            elif request == RPCUtilityRequest.STOP_PROFILE:
+                return self.stop_profile(identity)
             else:
                 raise ValueError(f"Unknown RPCUtilityRequest type: {request}")
 
