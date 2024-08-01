@@ -310,7 +310,29 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             get_pp_group().send_tensor_dict(output.tensors)
+
+            # recieve broadcast from last rank
+            output = get_pp_group().broadcast_tensor_dict(
+                src=self.parallel_config.pipeline_parallel_size - 1
+            )
+            # assert isinstance(output, SamplerOutput)
+            model_input.add_sampler_output(
+                sampler_output=SamplerOutput(outputs=[],sampled_token_ids=output["sampled_token_ids"]),
+            )
+            # model_input.outputs.append(
+            #     ModelOutput(
+            #         output_ready_event=None,
+            #         hidden_states=None
+            #     )
+            # )
             return [None]
+        else:
+            # make sure we are not last step
+            # broadcast to other ranks
+            get_pp_group().broadcast_tensor_dict(
+                {"sampled_token_ids": model_input.outputs[-1].sampler_output.sampled_token_ids},
+                src=self.parallel_config.pipeline_parallel_size - 1
+            )
 
         # output is List[SamplerOutput]
         return output
