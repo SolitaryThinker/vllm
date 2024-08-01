@@ -166,7 +166,7 @@ class MultiStepWorker(Worker):
 
             # recieve broadcast from last rank
             # print('receiving broadcast from last rank')
-            output = torch.empty((num_seqs, 1), dtype=torch.long).cuda()
+            output = torch.empty((num_seqs, 1), dtype=torch.long, device=self.device)
             get_pp_group().broadcast(output,
                 src=self.parallel_config.pipeline_parallel_size - 1,
                 async_op=True)
