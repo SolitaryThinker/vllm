@@ -1133,7 +1133,7 @@ class ExecuteModelRequest:
         # TODO make this be able to handle batches with variable number of steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
-        return first_seq_group.state.remaining_steps == 1
+        return first_seq_group.remaining_steps == 1
 
     @property
     def current_step(self) -> int:

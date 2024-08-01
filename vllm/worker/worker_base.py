@@ -313,6 +313,13 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             get_pp_group().send_tensor_dict(output.tensors,
                                             all_gather_group=get_tp_group())
             return [None]
+        else:
+            # make sure we are not last step
+            # broadcast to other ranks
+            get_pp_group().broadcast_tensor_dict(
+                {"sampled_token_ids": model_input.outputs[-1].sampler_output.sampled_token_ids},
+                src=self.parallel_config.pipeline_parallel_size - 1
+            )
 
         # output is List[SamplerOutput]
         return output
