@@ -93,6 +93,7 @@ class MultiStepWorker(Worker):
                 )
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
+                print('len of multi_step_states', len(self.multi_step_states))
             else:
                 # get_tp_group().broadcast_object({'virtual_engine': virtual_engine}, src=0)
                 multi_step_state = self.multi_step_states[virtual_engine]
@@ -116,6 +117,7 @@ class MultiStepWorker(Worker):
                     broadcast_tensor_dict(broadcast_data, src=0)
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
+                print('len of multi_step_states', len(self.multi_step_states))
                 assert isinstance(model_input,
                                   ModelInputForGPUWithMultiStepMetadata)
         else:
@@ -131,6 +133,7 @@ class MultiStepWorker(Worker):
                 virtual_engine = worker_input.virtual_engine
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input, model_input)
+                print('len of multi_step_states', len(self.multi_step_states))
             else:
                 # output = get_tp_group().broadcast_object({'virtual_engine': virtual_engine}, src=0)
                 # virtual_engine = output['virtual_engine']

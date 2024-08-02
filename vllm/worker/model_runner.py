@@ -672,7 +672,7 @@ class ModelOutput:
     def _pythonize_sampler_output_wait_on_event(
             self, input_metadata: ModelInputForGPUWithSamplingMetadata,
             copy_stream: torch.cuda.Stream) -> None:
-        self.sampler_output_ready_event.synchronize()
+        # self.sampler_output_ready_event.synchronize()
         with torch.cuda.stream(copy_stream):
             _pythonize_sampler_output(input_metadata, self.sampler_output)
 
@@ -1404,15 +1404,15 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                     self.flashinfer_decode_wrapper
             model_input.attn_metadata.begin_forward()
 
-        debug_multi_step = False
+        debug_multi_step = True
         if model_input.is_multi_step and debug_multi_step:
             print(
                 f'=======step {model_input.current_step} for {model_input.virtual_engine}============='
             )
-            print(f'is_multi_step: {model_input.is_multi_step}')
-            print(f'is_last_step: {model_input.is_last_step}')
-            print(f'current_step: {model_input.current_step}')
-            print(f'is_first_multi_step: {model_input.is_first_multi_step}')
+            # print(f'is_multi_step: {model_input.is_multi_step}')
+            # print(f'is_last_step: {model_input.is_last_step}')
+            # print(f'current_step: {model_input.current_step}')
+            # print(f'is_first_multi_step: {model_input.is_first_multi_step}')
 
         # some pre-execute model logic for multi-step:
         #   - if it's the first step, we need to reset the sampling tensors
@@ -1434,8 +1434,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             if self.is_driver_worker and get_pp_group().is_last_rank:
                 self.model.sampler.include_gpu_probs_tensor = True
                 model_input.sampling_metadata.skip_sampler_cpu_output = True
-                for output in model_input.outputs:
-                    output.maybe_pythonize(model_input, self._copy_stream)
+                # for output in model_input.outputs:
+                    # output.maybe_pythonize(model_input, self._copy_stream)
 
         current_stream = torch.cuda.current_stream()
 
@@ -1469,8 +1469,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                                          device=self.device),
             **seqlen_agnostic_kwargs)
 
-        if model_input.is_multi_step:
-            model_input.record_step_event()
+        # if model_input.is_multi_step:
+        #     model_input.record_step_event()
 
         if get_pp_group().is_last_rank:
             logits = self.model.compute_logits(hidden_or_intermediate_states,
@@ -1483,10 +1483,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 )
 
                 if model_input.is_multi_step:
-                    output_ready_event = torch.cuda.Event()
-                    output_ready_event.record(current_stream)
+                    # output_ready_event = torch.cuda.Event()
+                    # output_ready_event.record(current_stream)
                     model_input.outputs.append(
-                        ModelOutput(output, output_ready_event, None))
+                        ModelOutput(output, None, None))
+                    print('outputs length:', len(model_input.outputs))
 
                 if self.return_hidden_states:
                     # we only need to pass hidden states of most recent token
@@ -1794,10 +1795,10 @@ def _pythonize_sampler_output(
                           dtype=output.sampled_token_ids.dtype,
                           device="cpu",
                           pin_memory=True)
-    logprobs = torch.empty(*output.logprobs.shape,
-                           dtype=output.logprobs.dtype,
-                           device="cpu",
-                           pin_memory=True)
+    # logprobs = torch.empty(*output.logprobs.shape,
+    #                        dtype=output.logprobs.dtype,
+    #                        device="cpu",
+    #                        pin_memory=True)
     # prompt_logprobs = torch.empty(
     #     *output.prompt_logprobs.shape,
     #     dtype=output.prompt_logprobs.dtype,
@@ -1808,7 +1809,8 @@ def _pythonize_sampler_output(
     # logprobs = logprobs.copy_(output.logprobs, non_blocking=False)
     samples = samples.copy_(output.sampled_token_ids, non_blocking=False)
 
-    samples = samples.tolist()
+    samples_l = samples.tolist()
+    del samples
     # logprobs = logprobs.tolist()
     # print('samples', samples)
     # print('logprobs', logprobs)
@@ -1820,7 +1822,7 @@ def _pythonize_sampler_output(
     sampling_metadata = model_input.sampling_metadata
 
     for (seq_group, sample_result) in zip(sampling_metadata.seq_groups,
-                                          samples):
+                                          samples_l):
         seq_ids = seq_group.seq_ids
         # next_token_ids, parent_ids = sample_result
         next_token_ids = sample_result

@@ -246,12 +246,15 @@ class _AsyncLLMEngine(LLMEngine):
             virtual_engine]
         if not self._has_remaining_steps(seq_group_metadata_list):
             is_first_multi_step = True
+            print('run sched')
             seq_group_metadata_list, scheduler_outputs = self.scheduler[
                 virtual_engine].schedule()
 
             if not scheduler_outputs.is_empty() and scheduler_outputs.num_lookahead_slots > 0:
                 self.cached_scheduler_outputs[virtual_engine] = (
                     seq_group_metadata_list, scheduler_outputs)
+        else:
+            print('skip sched')
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
@@ -281,10 +284,12 @@ class _AsyncLLMEngine(LLMEngine):
                 seq_group.finish_step()
         # TODO: skip this if not at end of multi-step
         if not self._has_remaining_steps(seq_group_metadata_list):
+            print('run output process')
             request_outputs = self._process_model_outputs(
                 output, scheduler_outputs.scheduled_seq_groups,
                 scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
         else:
+            print('skip output process')
             request_outputs = []
 
         # Log stats.
