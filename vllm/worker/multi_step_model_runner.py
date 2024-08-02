@@ -219,7 +219,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             model_input = self._advance_step(
                 model_input, model_input.outputs[-1].sampler_output)
             if model_input.sampling_metadata:
-                model_input.sampling_metadata.reuse_sampling_tensors = True
+                model_input.sampling_metadata.reuse_sampling_tensors = False
 
         # make sure we skip the sampler on the lask rank and only pythonize
         # if CPU is ahead

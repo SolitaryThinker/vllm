@@ -10,6 +10,7 @@ from vllm.worker.worker_base import IntermediateTensors
 import dataclasses
 from dataclasses import field
 import torch
+import gc
 
 from vllm.worker.multi_step_model_runner import (
     ModelInputForGPUWithMultiStepMetadata, ModelOutput)
@@ -28,6 +29,7 @@ class MultiStepWorker(Worker):
         pipeline_parallel_size = self.parallel_config.pipeline_parallel_size
         self.multi_step_states: List[
             Optional[MultiStepState]] = [None] * pipeline_parallel_size
+        self.temp_output = None
 
     def prepare_input(
         self,
@@ -70,14 +72,17 @@ class MultiStepWorker(Worker):
                 worker_input = multi_step_state.worker_input
 
                 assert model_input.current_step == execute_model_req.current_step
-                model_input = dataclasses.replace(
-                    model_input,
-                    current_step=execute_model_req.current_step,
-                    outputs=multi_step_state.model_input.outputs,
-                    is_multi_step=True,
-                    is_last_step=execute_model_req.is_last_step,
-                    is_first_multi_step=False,
-                )
+                model_input.current_step = execute_model_req.current_step
+                model_input.is_last_step = execute_model_req.is_last_step
+                model_input.is_first_multi_step = False
+                # model_input = dataclasses.replace(
+                #     model_input,
+                #     current_step=execute_model_req.current_step,
+                #     outputs=multi_step_state.model_input.outputs,
+                #     is_multi_step=True,
+                #     is_last_step=execute_model_req.is_last_step,
+                #     is_first_multi_step=False,
+                # )
                 if self.do_metadata_broadcast:
                     broadcast_data = worker_input.as_broadcastable_tensor_dict(
                     )
@@ -89,6 +94,7 @@ class MultiStepWorker(Worker):
                 assert isinstance(model_input,
                                   ModelInputForGPUWithMultiStepMetadata)
         else:
+            assert False
             model_input, worker_input = self._get_worker_input_from_broadcast()
             if self.model_input.is_first_multi_step:
                 model_input = ModelInputForGPUWithMultiStepMetadata(
@@ -136,15 +142,18 @@ class MultiStepWorker(Worker):
 
             # recieve broadcast from last rank
             # print('receiving broadcast from last rank')
-            output = torch.empty((num_seqs, 1),
-                                 dtype=torch.long,
-                                 device=self.device)
+            self.temp_output = torch.empty((num_seqs, 1),
+                                            dtype=torch.long,
+                                            device=self.device)
+            # output = torch.empty((num_seqs, 1),
+            #                      dtype=torch.long,
+            #                      device=self.device)
             get_pp_group().broadcast(
-                output,
+                self.temp_output,
                 src=self.parallel_config.pipeline_parallel_size - 1,
                 async_op=True)
             model_input.add_sampler_output(sampler_output=SamplerOutput(
-                outputs=[], sampled_token_ids=output), )
+                outputs=[], sampled_token_ids=self.temp_output), )
 
             # output = get_pp_group().broadcast_tensor_dict(
             #     src=self.parallel_config.pipeline_parallel_size - 1)
