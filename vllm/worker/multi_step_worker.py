@@ -20,7 +20,7 @@ class ModelInputForGPUWithMultiStepMetadata(
     is_last_step: bool = False
     is_first_multi_step: bool = False
     step_cuda_events: List[torch.cuda.Event] = field(
-        default_factory=lambda: [torch.cuda.Event(blocking=True)] * 2)
+        default_factory=lambda: [None] * 2)
 
     def __init__(self, *args, **kwargs):
         self.current_step = kwargs.pop('current_step', 0)
@@ -28,7 +28,7 @@ class ModelInputForGPUWithMultiStepMetadata(
         self.is_multi_step = kwargs.pop('is_multi_step', False)
         self.is_last_step = kwargs.pop('is_last_step', False)
         self.is_first_multi_step = kwargs.pop('is_first_multi_step', False)
-        self.step_cuda_events = [torch.cuda.Event(blocking=True)] * 2
+        self.step_cuda_events = [None] * 2
         super().__init__(*args, **kwargs)
 
     def record_step_event(self):

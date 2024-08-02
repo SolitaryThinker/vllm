@@ -1432,8 +1432,8 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
 
             # make sure we skip the sampler on the lask rank and 
             if self.is_driver_worker and get_pp_group().is_last_rank:
-                self.model.sampler.include_gpu_probs_tensor = True
-                model_input.sampling_metadata.skip_sampler_cpu_output = True
+                self.model.sampler.include_gpu_probs_tensor = False
+                model_input.sampling_metadata.skip_sampler_cpu_output = False
                 # for output in model_input.outputs:
                     # output.maybe_pythonize(model_input, self._copy_stream)
 
@@ -1517,7 +1517,7 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         if model_input.is_multi_step and model_input.is_last_step:
             outputs = []
             for output in model_input.outputs:
-                output.pythonize(model_input, self._copy_stream)
+                # output.pythonize(model_input, self._copy_stream)
                 outputs.append(output.sampler_output)
             return outputs
         else:
