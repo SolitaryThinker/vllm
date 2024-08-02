@@ -2,7 +2,7 @@ from vllm.worker.worker import Worker
 from dataclasses import dataclass
 from vllm.worker.worker import WorkerInput
 from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
-                                      ModelRunnerInputBase, ModelOutput)
+                                      ModelRunnerInputBase)
 from vllm.sequence import ExecuteModelRequest, SamplerOutput
 from vllm.distributed import broadcast_tensor_dict, get_pp_group
 from typing import Tuple, Optional, List, Union
@@ -11,39 +11,11 @@ import dataclasses
 from dataclasses import field
 import torch
 
+from vllm.worker.multi_step_model_runner import (
+    ModelInputForGPUWithMultiStepMetadata, ModelOutput
+)
 
-# @dataclass(frozen=True)
-class ModelInputForGPUWithMultiStepMetadata(
-        ModelInputForGPUWithSamplingMetadata):
-    outputs: List[ModelOutput] = field(default_factory=list)
-    is_multi_step: bool = False
-    is_last_step: bool = False
-    is_first_multi_step: bool = False
-    step_cuda_events: List[torch.cuda.Event] = field(
-        default_factory=lambda: [torch.cuda.Event(blocking=True)] * 2)
 
-    def __init__(self, *args, **kwargs):
-        self.current_step = kwargs.pop('current_step', 0)
-        self.outputs = kwargs.pop('outputs', [])
-        self.is_multi_step = kwargs.pop('is_multi_step', False)
-        self.is_last_step = kwargs.pop('is_last_step', False)
-        self.is_first_multi_step = kwargs.pop('is_first_multi_step', False)
-        self.step_cuda_events = [torch.cuda.Event(blocking=True)] * 2
-        super().__init__(*args, **kwargs)
-
-    def record_step_event(self):
-        self.step_cuda_events[self.current_step %
-                              2] = torch.cuda.Event(blocking=True)
-        self.step_cuda_events[self.current_step % 2].record()
-
-    def wait_previous_step(self):
-        self.step_cuda_events[(self.current_step + 1) % 2].wait()
-
-    def add_sampler_output(self, sampler_output: SamplerOutput):
-        self.outputs.append(
-            ModelOutput(sampler_output=sampler_output,
-                        sampler_output_ready_event=None,
-                        pythonized=False))
 
 @dataclass
 class MultiStepState:
