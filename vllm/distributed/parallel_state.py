@@ -360,7 +360,10 @@ class GroupCoordinator:
             output_tensor = None
         return output_tensor
 
-    def broadcast(self, input_: torch.Tensor, src: int = 0, async_op: bool = False):
+    def broadcast(self,
+                  input_: torch.Tensor,
+                  src: int = 0,
+                  async_op: bool = False):
         """Broadcast the input tensor.
         NOTE: `src` is the local rank of the source rank.
         """

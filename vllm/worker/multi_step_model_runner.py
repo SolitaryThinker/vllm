@@ -77,6 +77,7 @@ class ModelOutput:
             return True
         return False
 
+
 # @dataclass(frozen=True)
 class ModelInputForGPUWithMultiStepMetadata(
         ModelInputForGPUWithSamplingMetadata):
@@ -110,7 +111,10 @@ class ModelInputForGPUWithMultiStepMetadata(
                         sampler_output_ready_event=None,
                         pythonized=False))
 
-class MultiStepModelRunnerBase(GPUModelRunnerBase):
+
+class MultiStepModelRunnerBase(
+        GPUModelRunnerBase[ModelInputForGPUWithMultiStepMetadata]):
+
     def __init__(self, base_model_runner: ModelRunnerBase, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -120,25 +124,42 @@ class MultiStepModelRunnerBase(GPUModelRunnerBase):
 
         self.is_multi_step = self.scheduler_config.is_multi_step
         self._copy_stream = torch.cuda.Stream()
-    
-    def make_model_input_from_broadcasted_tensor_dict(self, tensor_dict: Dict[str, Any]) -> Any:
-        return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(tensor_dict)
-    
-    def prepare_model_input(self, seq_group_metadata_list: List[SequenceGroupMetadata], virtual_engine: int = 0, finished_requests_ids: List[str] | None = None) -> Any:
-        return self._base_model_runner.prepare_model_input(seq_group_metadata_list, virtual_engine, finished_requests_ids)
-    
+
+    def make_model_input_from_broadcasted_tensor_dict(
+            self,
+            tensor_dict: Dict[str,
+                              Any]) -> ModelInputForGPUWithSamplingMetadata:
+        return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(
+            tensor_dict)
+
+    def prepare_model_input(
+        self,
+        seq_group_metadata_list: List[SequenceGroupMetadata],
+        virtual_engine: int = 0,
+        finished_requests_ids: Optional[List[str]] = None
+    ) -> ModelInputForGPUWithSamplingMetadata:
+        return self._base_model_runner.prepare_model_input(
+            seq_group_metadata_list, virtual_engine, finished_requests_ids)
+
     def load_model(self) -> None:
         return self._base_model_runner.load_model()
-    
-    def save_sharded_state(self, path: str, pattern: str | None = None, max_size: int | None = None) -> None:
-        return self._base_model_runner.save_sharded_state(path, pattern, max_size)
-    
-    def save_tensorized_model(self, tensorizer_config: TensorizerConfig) -> None:
+
+    def save_sharded_state(
+        self,
+        path: str,
+        pattern: Optional[str] = None,
+        max_size: Optional[int] = None,
+    ) -> None:
+        return self._base_model_runner.save_sharded_state(
+            path, pattern, max_size)
+
+    def save_tensorized_model(self,
+                              tensorizer_config: TensorizerConfig) -> None:
         return self._base_model_runner.save_tensorized_model(tensorizer_config)
-    
+
     def profile_run(self) -> None:
         return self._base_model_runner.profile_run()
-    
+
     def remove_all_loras(self):
         return self._base_model_runner.remove_all_loras()
 
@@ -148,6 +169,7 @@ class MultiStepModelRunnerBase(GPUModelRunnerBase):
     @property
     def vocab_size(self) -> int:
         return self._base_model_runner.vocab_size
+
 
 class MultiStepModelRunner(MultiStepModelRunnerBase):
 
@@ -193,7 +215,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             if model_input.sampling_metadata:
                 model_input.sampling_metadata.reuse_sampling_tensors = False
 
-        # make sure we skip the sampler on the lask rank and 
+        # make sure we skip the sampler on the lask rank and
         if self.is_driver_worker and get_pp_group().is_last_rank:
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
             model_input.sampling_metadata.skip_sampler_cpu_output = True
@@ -203,18 +225,20 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         current_stream = torch.cuda.current_stream()
 
         # Execute the model
-        output = self._base_model_runner.execute_model(
-            model_input, kv_caches, intermediate_tensors, num_steps=1)
+        output = self._base_model_runner.execute_model(model_input,
+                                                       kv_caches,
+                                                       intermediate_tensors,
+                                                       num_steps=1)
 
         model_input.record_step_event()
 
         if get_pp_group().is_last_rank and self.is_driver_worker:
-            assert len(output) == 1, "MultiStepModelRunner only supports single step"
+            assert len(
+                output) == 1, "MultiStepModelRunner only supports single step"
             output_ready_event = torch.cuda.Event()
             output_ready_event.record(current_stream)
             model_input.outputs.append(
                 ModelOutput(output[0], output_ready_event, None))
-
 
         model_input.current_step += 1
 
