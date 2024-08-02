@@ -12,9 +12,7 @@ from dataclasses import field
 import torch
 
 from vllm.worker.multi_step_model_runner import (
-    ModelInputForGPUWithMultiStepMetadata, ModelOutput
-)
-
+    ModelInputForGPUWithMultiStepMetadata, ModelOutput)
 
 
 @dataclass
@@ -138,8 +136,11 @@ class MultiStepWorker(Worker):
 
             # recieve broadcast from last rank
             # print('receiving broadcast from last rank')
-            output = torch.empty((num_seqs, 1), dtype=torch.long, device=self.device)
-            get_pp_group().broadcast(output,
+            output = torch.empty((num_seqs, 1),
+                                 dtype=torch.long,
+                                 device=self.device)
+            get_pp_group().broadcast(
+                output,
                 src=self.parallel_config.pipeline_parallel_size - 1,
                 async_op=True)
             model_input.add_sampler_output(sampler_output=SamplerOutput(
@@ -154,9 +155,10 @@ class MultiStepWorker(Worker):
             # make sure we are not last step
             # broadcast to other ranks
             # print('last rank, broadcasting')
-            get_pp_group().broadcast(model_input.outputs[-1].sampler_output.sampled_token_ids,
-                                     src=self.parallel_config.pipeline_parallel_size - 1,
-                                     async_op=True)
+            get_pp_group().broadcast(
+                model_input.outputs[-1].sampler_output.sampled_token_ids,
+                src=self.parallel_config.pipeline_parallel_size - 1,
+                async_op=True)
             # get_pp_group().broadcast_tensor_dict(
             #     {
             #         "sampled_token_ids":
