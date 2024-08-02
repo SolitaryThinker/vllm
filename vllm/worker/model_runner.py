@@ -28,7 +28,7 @@ from vllm.attention import AttentionMetadata, get_attn_backend
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, MultiModalConfig, ParallelConfig,
                          PromptAdapterConfig, SchedulerConfig)
-from vllm.distributed import get_pp_group, get_tp_group
+from vllm.distributed import get_pp_group
 from vllm.distributed.parallel_state import graph_capture
 from vllm.inputs import INPUT_REGISTRY
 from vllm.logger import init_logger
@@ -49,8 +49,7 @@ from vllm.prompt_adapter.worker_manager import (
     LRUCacheWorkerPromptAdapterManager)
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import (IntermediateTensors, SamplerOutput,
-                           SequenceGroupMetadata, SequenceOutput,
-                           CompletionSequenceGroupOutput, Logprob)
+                           SequenceGroupMetadata)
 from vllm.utils import (CudaMemoryProfiler, flatten_2d_lists,
                         get_kv_cache_torch_dtype, is_hip,
                         is_pin_memory_available)
@@ -168,10 +167,6 @@ class ModelInputForGPUWithSamplingMetadata(ModelInputForGPU):
             tensor_dict = _init_attn_metadata_from_tensor_dict(
                 attn_backend, tensor_dict)
         return cls(**tensor_dict)
-
-    @property
-    def is_multi_step(self):
-        return False
 
 
 class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
@@ -630,7 +625,6 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
             finished_requests_ids=self.finished_requests_ids,
             prompt_adapter_mapping=prompt_adapter_mapping,
             prompt_adapter_requests=prompt_adapter_requests)
-
 
 
 class GPUModelRunnerBase(ModelRunnerBase[TModelInputForGPU]):
@@ -1377,38 +1371,35 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                                          device=self.device),
             **seqlen_agnostic_kwargs)
 
-        if get_pp_group().is_last_rank:
-            logits = self.model.compute_logits(hidden_or_intermediate_states,
-                                               model_input.sampling_metadata)
-            if self.is_driver_worker:
-                # Sample the next token.
-                output: SamplerOutput = self.model.sample(
-                    logits=logits,
-                    sampling_metadata=model_input.sampling_metadata,
-                )
-
-                if self.return_hidden_states:
-                    # we only need to pass hidden states of most recent token
-                    assert model_input.sampling_metadata is not None
-                    indices = model_input.sampling_metadata.selected_token_indices
-                    if model_input.is_prompt:
-                        hidden_states = hidden_or_intermediate_states.index_select(
-                            0, indices)
-                    elif decode_meta.use_cuda_graph:
-                        hidden_states = hidden_or_intermediate_states[:len(
-                            indices)]
-                    else:
-                        hidden_states = hidden_or_intermediate_states
-
-                    output.hidden_states = hidden_states
-
-
         # Compute the logits in the last pipeline stage.
         if not get_pp_group().is_last_rank:
             return hidden_or_intermediate_states
 
+        logits = self.model.compute_logits(hidden_or_intermediate_states,
+                                           model_input.sampling_metadata)
+
         if not self.is_driver_worker:
             return []
+
+        # Sample the next token.
+        output: SamplerOutput = self.model.sample(
+            logits=logits,
+            sampling_metadata=model_input.sampling_metadata,
+        )
+
+        if self.return_hidden_states:
+            # we only need to pass hidden states of most recent token
+            assert model_input.sampling_metadata is not None
+            indices = model_input.sampling_metadata.selected_token_indices
+            if model_input.is_prompt:
+                hidden_states = hidden_or_intermediate_states.index_select(
+                    0, indices)
+            elif decode_meta.use_cuda_graph:
+                hidden_states = hidden_or_intermediate_states[:len(indices)]
+            else:
+                hidden_states = hidden_or_intermediate_states
+
+            output.hidden_states = hidden_states
 
         return [output]
 
@@ -1582,4 +1573,3 @@ def _get_graph_batch_size(batch_size: int) -> int:
     else:
         return ((batch_size + _BATCH_SIZE_ALIGNMENT - 1) //
                 _BATCH_SIZE_ALIGNMENT * _BATCH_SIZE_ALIGNMENT)
-
