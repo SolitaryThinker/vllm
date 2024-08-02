@@ -123,6 +123,7 @@ class MultiStepModelRunnerBase(
         self._base_model_runner: ModelRunnerBase = base_model_runner
 
         self.is_multi_step = self.scheduler_config.is_multi_step
+        # used to copy tensors from GPU to CPU asynchronously
         self._copy_stream = torch.cuda.Stream()
 
     def make_model_input_from_broadcasted_tensor_dict(
@@ -186,6 +187,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         metadata
         """
         assert num_steps == 1, "MultiStepModelRunner only supports num_steps=1"
+
+        # path for warm up runs
         if not model_input.is_multi_step:
             return self._base_model_runner.execute_model(
                 model_input, kv_caches, intermediate_tensors, num_steps)
@@ -205,17 +208,17 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         #   - if it's not the first step, we need to advance the step using the
         #   appended sampler output from last iteration
         #   - also maybe pythonize if CPU is ahead of GPU
-        if model_input.is_first_multi_step:
-            if model_input.sampling_metadata:
-                model_input.sampling_metadata.reuse_sampling_tensors = False
-        else:
-            model_input.wait_previous_step()
-            model_input = self._advance_step(
-                model_input, model_input.outputs[-1].sampler_output)
-            if model_input.sampling_metadata:
-                model_input.sampling_metadata.reuse_sampling_tensors = False
 
-        # make sure we skip the sampler on the lask rank and
+        # explicitly block on the previous step's forward to make sure we
+        # don't clobber any GPU tensors still in use
+        model_input.wait_previous_step()
+        model_input = self._advance_step(
+            model_input, model_input.outputs[-1].sampler_output)
+        if model_input.sampling_metadata:
+            model_input.sampling_metadata.reuse_sampling_tensors = True
+
+        # make sure we skip the sampler on the lask rank and only pythonize
+        # if CPU is ahead
         if self.is_driver_worker and get_pp_group().is_last_rank:
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
             model_input.sampling_metadata.skip_sampler_cpu_output = True
@@ -230,15 +233,19 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                                                        intermediate_tensors,
                                                        num_steps=1)
 
+        # record the event for the current step so that the next step can sync
         model_input.record_step_event()
 
         if get_pp_group().is_last_rank and self.is_driver_worker:
             assert len(
                 output) == 1, "MultiStepModelRunner only supports single step"
+
+            # event for the pythonization so that we only pythonize if the
+            # tensors are ready. May be able to be combined with the step event
             output_ready_event = torch.cuda.Event()
             output_ready_event.record(current_stream)
             model_input.outputs.append(
-                ModelOutput(output[0], output_ready_event, None))
+                ModelOutput(output[0], output_ready_event, False))
 
         model_input.current_step += 1
 
@@ -249,7 +256,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         if not self.is_driver_worker:
             return []
 
-        # Pythonize the output
+        # Pythonize the output and block if needed since it is the last step
         if model_input.is_last_step:
             outputs = []
             for output in model_input.outputs:
@@ -362,10 +369,6 @@ def _pythonize_sampler_output(
                           dtype=output.sampled_token_ids.dtype,
                           device="cpu",
                           pin_memory=True)
-    logprobs = torch.empty(*output.logprobs.shape,
-                           dtype=output.logprobs.dtype,
-                           device="cpu",
-                           pin_memory=True)
     # prompt_logprobs = torch.empty(
     #     *output.prompt_logprobs.shape,
     #     dtype=output.prompt_logprobs.dtype,
@@ -376,7 +379,8 @@ def _pythonize_sampler_output(
     # logprobs = logprobs.copy_(output.logprobs, non_blocking=False)
     samples = samples.copy_(output.sampled_token_ids, non_blocking=False)
 
-    samples = samples.tolist()
+    samples_list = samples.tolist()
+    del samples
     # logprobs = logprobs.tolist()
     # print('samples', samples)
     # print('logprobs', logprobs)
@@ -388,7 +392,7 @@ def _pythonize_sampler_output(
     sampling_metadata = model_input.sampling_metadata
 
     for (seq_group, sample_result) in zip(sampling_metadata.seq_groups,
-                                          samples):
+                                          samples_list):
         seq_ids = seq_group.seq_ids
         # next_token_ids, parent_ids = sample_result
         next_token_ids = sample_result
