@@ -211,11 +211,15 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
 
         # explicitly block on the previous step's forward to make sure we
         # don't clobber any GPU tensors still in use
-        model_input.wait_previous_step()
-        model_input = self._advance_step(
-            model_input, model_input.outputs[-1].sampler_output)
-        if model_input.sampling_metadata:
-            model_input.sampling_metadata.reuse_sampling_tensors = True
+        if model_input.is_first_multi_step:
+            if model_input.sampling_metadata:
+                model_input.sampling_metadata.reuse_sampling_tensors = False
+        else:
+            model_input.wait_previous_step()
+            model_input = self._advance_step(
+                model_input, model_input.outputs[-1].sampler_output)
+            if model_input.sampling_metadata:
+                model_input.sampling_metadata.reuse_sampling_tensors = True
 
         # make sure we skip the sampler on the lask rank and only pythonize
         # if CPU is ahead
