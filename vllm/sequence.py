@@ -822,32 +822,11 @@ class SequenceGroupMetadata:
         assert self._token_chunk_size is not None
         return self._token_chunk_size
 
-    @property
-    def num_lookahead_slots(self) -> int:
-        return self.state.num_lookahead_slots
-
-    @property
-    def num_steps(self) -> int:
-        return self.state.num_steps
-
-    @property
-    def remaining_steps(self) -> int:
-        return self.state.remaining_steps
-
-    @property
-    def current_step(self) -> int:
-        return self.state.current_step
-
-    @property
-    def is_first_multi_step(self) -> bool:
-        return self.state.current_step == 0
-
     def finish_step(self) -> None:
         assert self.state.current_step < self.state.num_steps
         self.state.current_step += 1
         self.state.remaining_steps -= 1
         assert self.state.remaining_steps >= 0
-        self.state.remaining_steps = max(0, self.state.remaining_steps)
 
 
 class SequenceOutput:
@@ -1123,23 +1102,23 @@ class ExecuteModelRequest:
 
     @property
     def is_first_multi_step(self) -> bool:
-        # TODO make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
-        return first_seq_group.is_first_multi_step
+        return first_seq_group.state.current_step == 0
 
     @property
     def is_last_step(self) -> bool:
-        # TODO make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
-        return first_seq_group.remaining_steps == 1
+        return first_seq_group.state.remaining_steps == 1
 
     @property
     def current_step(self) -> int:
-        # TODO make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of steps
         assert len(self.seq_group_metadata_list) > 0
-        return self.seq_group_metadata_list[0].current_step
+        return self.seq_group_metadata_list[0].state.current_step
 
     def clone(
         self, seq_group_metadata_list: List[SequenceGroupMetadata]

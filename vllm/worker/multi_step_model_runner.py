@@ -241,8 +241,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         model_input.record_step_event()
 
         if get_pp_group().is_last_rank and self.is_driver_worker:
-            assert len(
-                output) == 1, "MultiStepModelRunner only supports single step"
+            assert (len(output) == 1,
+                    "MultiStepModelRunner requires single-step base_models")
 
             # event for the pythonization so that we only pythonize if the
             # tensors are ready. May be able to be combined with the step event

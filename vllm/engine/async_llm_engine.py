@@ -260,11 +260,13 @@ class _AsyncLLMEngine(LLMEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
-        is_first_multi_step = False
         seq_group_metadata_list, scheduler_outputs = self.cached_scheduler_outputs[
             virtual_engine]
+
+        # skip the scheduler if there are any remaining steps in the seq groups.
+        # This ensures that the scheduler is only called again when the current
+        # batch has completed.
         if not self._has_remaining_steps(seq_group_metadata_list):
-            is_first_multi_step = True
             seq_group_metadata_list, scheduler_outputs = self.scheduler[
                 virtual_engine].schedule()
 
@@ -294,10 +296,8 @@ class _AsyncLLMEngine(LLMEngine):
         else:
             output = []
 
-        # assert len(seq_group_metadata_list) > 0
         for seq_group in seq_group_metadata_list:
             seq_group.finish_step()
-        # TODO: skip this if not at end of multi-step
         if not self._has_remaining_steps(seq_group_metadata_list):
             request_outputs = self._process_model_outputs(
                 output, scheduler_outputs.scheduled_seq_groups,
@@ -324,14 +324,15 @@ class _AsyncLLMEngine(LLMEngine):
         if len(seq_group_metadata_list) == 0:
             return False
         steps_remaining = [
-            seq_group.remaining_steps for seq_group in seq_group_metadata_list
+            seq_group.state.remaining_steps
+            for seq_group in seq_group_metadata_list
         ]
         if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
             raise AssertionError(
                 "All running sequence groups should have the same remaining steps."
             )
 
-        if any(seq_group.remaining_steps > 0
+        if any(seq_group.state.remaining_steps > 0
                for seq_group in seq_group_metadata_list):
             return True
         return False

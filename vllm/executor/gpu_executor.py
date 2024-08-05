@@ -69,7 +69,7 @@ class GPUExecutor(ExecutorBase):
             distributed_init_method: Optional[str] = None) -> Dict:
         worker_kwargs = self._get_worker_kwargs(local_rank, rank,
                                                 distributed_init_method)
-        
+
         if self.scheduler_config.is_multi_step:
             worker_kwargs.update(
                 worker_module_name="vllm.worker.multi_step_worker",
@@ -80,7 +80,7 @@ class GPUExecutor(ExecutorBase):
                 worker_class_name="create_spec_worker")
         else:
             worker_kwargs.update(worker_module_name="vllm.worker.worker",
-            worker_class_name="Worker")
+                                 worker_class_name="Worker")
 
         return worker_kwargs
 

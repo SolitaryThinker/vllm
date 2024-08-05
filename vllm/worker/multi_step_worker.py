@@ -143,8 +143,8 @@ class MultiStepWorker(Worker):
             # recieve broadcast from last rank
             # print('receiving broadcast from last rank')
             self.temp_output = torch.empty((num_seqs, 1),
-                                            dtype=torch.long,
-                                            device=self.device)
+                                           dtype=torch.long,
+                                           device=self.device)
             # output = torch.empty((num_seqs, 1),
             #                      dtype=torch.long,
             #                      device=self.device)
