@@ -14,7 +14,9 @@ from vllm.sequence import (ExecuteModelRequest, IntermediateTensors,
                            SamplerOutput)
 from vllm.utils import (enable_trace_function_call_for_thread,
                         update_environment_variables)
-from vllm.worker.model_runner_base import ModelRunnerBase, ModelRunnerInputBase
+from vllm.worker.model_runner_base import (ModelRunnerBase, 
+                                           ModelRunnerInputBase,
+                                           BroadcastableModelInput)
 
 logger = init_logger(__name__)
 
@@ -144,7 +146,7 @@ class WorkerInput:
             blocks_to_swap_out=tensor_dict.pop("blocks_to_swap_out"),
             blocks_to_copy=tensor_dict.pop("blocks_to_copy"),
             virtual_engine=tensor_dict["virtual_engine"],
-            num_steps=tensor_dict["num_steps"],
+            num_steps=tensor_dict.pop("num_steps"),
         )
 
     def as_broadcastable_tensor_dict(
@@ -236,14 +238,14 @@ class LocalOrDistributedWorkerBase(WorkerBase):
 
     def _get_driver_input_and_broadcast(
         self, execute_model_req: ExecuteModelRequest
-    ) -> Tuple[ModelRunnerInputBase, WorkerInput]:
+    ) -> Tuple[BroadcastableModelInput, WorkerInput]:
         """
         Get the driver input and broadcast it to other workers.
         """
         assert self.is_driver_worker
         worker_input: WorkerInput = self.prepare_worker_input(
             execute_model_req=execute_model_req)
-        model_input: ModelRunnerInputBase = (
+        model_input: BroadcastableModelInput = (
             self.model_runner.prepare_model_input(
                 execute_model_req.seq_group_metadata_list,
                 execute_model_req.virtual_engine,
@@ -280,6 +282,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
 
+        print('top of worker base')
         inputs = self.prepare_input(execute_model_req)
         if inputs is None:
             return None
@@ -298,6 +301,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             intermediate_tensors = IntermediateTensors(
                 get_pp_group().recv_tensor_dict())
 
+        print('calling execute_model')
         output = self.model_runner.execute_model(
             model_input, self.kv_cache[worker_input.virtual_engine]
             if self.kv_cache is not None else None, intermediate_tensors,
@@ -306,7 +310,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         self._handle_pipeline_parallel_output(model_input, output)
         if not get_pp_group().is_last_rank:
             return [None]
-
+        print('returning in worker base')
         # output is List[SamplerOutput]
         return output
 

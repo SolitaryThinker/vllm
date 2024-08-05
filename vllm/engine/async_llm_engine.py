@@ -241,9 +241,11 @@ class _AsyncLLMEngine(LLMEngine):
         the sequences and returns the newly generated results.
         """
         is_first_multi_step = False
+        print('step_async')
         seq_group_metadata_list, scheduler_outputs = self.cached_scheduler_outputs[
             virtual_engine]
         if not self._has_remaining_steps(seq_group_metadata_list):
+            print('calling sched')
             is_first_multi_step = True
             seq_group_metadata_list, scheduler_outputs = self.scheduler[
                 virtual_engine].schedule()
@@ -251,6 +253,8 @@ class _AsyncLLMEngine(LLMEngine):
             if scheduler_outputs.num_lookahead_slots > 0:
                 self.cached_scheduler_outputs[virtual_engine] = (
                     seq_group_metadata_list, scheduler_outputs)
+        else:
+            print('no sched')
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
