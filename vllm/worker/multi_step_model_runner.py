@@ -15,8 +15,6 @@ from vllm.worker.model_runner_base import (
     ModelRunnerBase,
     BroadcastableModelInput,
     _init_frozen_model_input_from_tensor_dict,
-    _add_attn_metadata_broadcastable_dict,
-    _add_sampling_metadata_broadcastable_dict,
     _init_attn_metadata_from_tensor_dict,
     _init_sampling_metadata_from_tensor_dict)
 from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
@@ -83,18 +81,6 @@ class ModelOutput:
             return True
         return False
 
-# class MutableModelRunnerInputBase(BroadcastableModelInput):
-#     """Local inputs to each worker's model runner. May contain
-#     device-specific data. Different worker backends may have different methods
-#     of converting from the global ExecuteModelRequest produced by the LLM
-#     engine to the worker-local ModelRunnerInputBase objects.
-
-#     Model runners that support multi-GPU execution should define a
-#     ModelRunnerInputBase subclass, add their required fields, and specify how to
-#     serialize/deserialize a ModelInput for broadcast between workers.
-#     """
-#     pass
-
 @dataclass(frozen=False)
 class MutableModelInputForGPUWithMultiStepMetadata(
         BroadcastableModelInput):
@@ -112,21 +98,10 @@ class MutableModelInputForGPUWithMultiStepMetadata(
     num_queries: int = -1
     
 
-    # def __init__(self, *args, **kwargs):
-    #     self.current_step = kwargs.pop('current_step', 0)
-    #     self.outputs = kwargs.pop('outputs', [])
-    #     self.is_multi_step = kwargs.pop('is_multi_step', True)
-    #     self.is_last_step = kwargs.pop('is_last_step', False)
-    #     self.is_first_multi_step = kwargs.pop('is_first_multi_step', False)
-    #     self.step_cuda_events = [torch.cuda.Event(blocking=True)] * 2
-    #     self.num_queries = kwargs.pop('num_queries', -1)
-    #     super().__init__(*args, **kwargs)
-
     def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
 
         tensor_dict = self.frozen_model_input.as_broadcastable_tensor_dict()
         new_tensor_dict = {
-            # 'outputs': self.outputs,
             'last_sampled_token_ids': self.last_sampled_token_ids,
             'current_step': self.current_step,
             'is_multi_step': self.is_multi_step,
@@ -134,10 +109,8 @@ class MutableModelInputForGPUWithMultiStepMetadata(
             'is_first_multi_step': self.is_first_multi_step,
             'num_seqs': self.num_seqs,
             'num_queries': self.num_queries,
-            # 'step_cuda_events': self.step_cuda_events,
         }
         tensor_dict.update(new_tensor_dict)
-        # print('broadcasting =====', tensor_dict)
         return tensor_dict
 
     @classmethod
@@ -146,7 +119,6 @@ class MutableModelInputForGPUWithMultiStepMetadata(
             tensor_dict: Dict[str, Any],
             attn_backend: Optional["AttentionBackend"] = None,
     ) -> "MutableModelInputForGPUWithMultiStepMetadata":
-        # print('from_broadcasted_tensor_dict', tensor_dict)
         tensor_dict = _init_sampling_metadata_from_tensor_dict(tensor_dict)
         if attn_backend is not None:
             tensor_dict = _init_attn_metadata_from_tensor_dict(
@@ -219,15 +191,6 @@ class MultiStepModelRunnerBase(
     def vocab_size(self) -> int:
         return self._base_model_runner.vocab_size
 
-    # def _prepare_model_input_tensors(
-    #     self, 
-    #     seq_group_metadata_list: List[SequenceGroupMetadata], 
-    #     finished_requests_ids: Optional[List[str]] = None
-    # ) -> MutableModelInputForGPUWithMultiStepMetadata:
-    #     model_input = super()._prepare_model_input_tensors(seq_group_metadata_list, finished_requests_ids)
-    #     model_input.is_multi_step = True
-    #     return model_input
-
 
 class MultiStepModelRunner(MultiStepModelRunnerBase):
 
@@ -241,17 +204,12 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         )
         return model_input
 
-        # return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(
-        #     tensor_dict)
-
     def prepare_model_input(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
         virtual_engine: int = 0,
         finished_requests_ids: Optional[List[str]] = None
     ) -> MutableModelInputForGPUWithMultiStepMetadata:
-        # return self._base_model_runner.prepare_model_input(
-        #     seq_group_metadata_list, virtual_engine, finished_requests_ids)
         frozen_model_input = self._base_model_runner.prepare_model_input(
             seq_group_metadata_list, virtual_engine, finished_requests_ids)
 
@@ -280,12 +238,11 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         frozen_model_input = model_input.frozen_model_input
         # path for warm up runs
         if not model_input.is_multi_step:
-            print("WTFFFFFFF")
             return self._base_model_runner.execute_model(
                 model_input.frozen_model_input, 
                 kv_caches, intermediate_tensors, num_steps)
 
-        debug_multi_step = True
+        debug_multi_step = False
         if debug_multi_step:
             print(
                 f'=======step {model_input.current_step} for {model_input.frozen_model_input.virtual_engine}============='
@@ -327,7 +284,6 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         current_stream = torch.cuda.current_stream()
 
         # Execute the model
-        print('calling base model runner')
         output = self._base_model_runner.execute_model(
             model_input.frozen_model_input,
             kv_caches,
@@ -335,7 +291,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             num_steps=1)
 
         # record the event for the current step so that the next step can sync
-        # model_input.record_step_event()
+        model_input.record_step_event()
 
         if get_pp_group().is_last_rank and self.is_driver_worker:
             assert len(
@@ -422,7 +378,6 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
     def _advance_step(
             self, model_input: MutableModelInputForGPUWithMultiStepMetadata,
             out: SamplerOutput) -> MutableModelInputForGPUWithMultiStepMetadata:
-        # model_input.current_step += 1
         frozen_model_input = model_input.frozen_model_input
         # assert frozen_model_input.seq_lens is not None
         # assert frozen_model_input.query_lens is not None
