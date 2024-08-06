@@ -146,7 +146,7 @@ class MultiStepWorker(Worker):
             virtual_engine = worker_input.virtual_engine
             if model_input.is_first_multi_step:
                 self.multi_step_states[virtual_engine] = MultiStepState(
-                    worker_input, model_input)
+                    worker_input=worker_input, model_input=model_input)
             else:
                 multi_step_state = self.multi_step_states[virtual_engine]
                 model_input = multi_step_state.model_input
@@ -174,26 +174,27 @@ class MultiStepWorker(Worker):
         needs to be broadcasted to all other ranks so that they are able to
         update the next step's input metadata inplace.  
         """
-        num_seqs = model_input.num_queries
-        print('num_seqs:', num_seqs)
-        print('num_queries:', model_input.num_queries)
         if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             get_pp_group().send_tensor_dict(output.tensors)
 
-            # recieve broadcast from last rank
-            # print('receiving broadcast from last rank')
-            # self.temp_output = torch.empty((num_seqs, 1),
-            #                                dtype=torch.long,
-            #                                device=self.device)
-            if self.is_driver_worker:
-                output = torch.empty((num_seqs, 1),
+        num_seqs = model_input.num_queries
+        print('num_seqs:', num_seqs)
+        print('num_queries:', model_input.num_queries)
+        if not get_pp_group().is_last_rank:
+            # recieve broadcast from last rank if 
+            #   - not last rank
+            #   - not last step
+            #   - is driver worker
+            if self.is_driver_worker and not model_input.is_last_step:
+                output = torch.zeros((num_seqs, 1),
                                     dtype=torch.long,
                                     device=self.device)
                 get_pp_group().broadcast(
                     output,
                     src=self.parallel_config.pipeline_parallel_size - 1,
                     async_op=True)
+                print('output:', output)
                 model_input.add_sampler_output(sampler_output=SamplerOutput(
                     outputs=[], sampled_token_ids=output), )
 
@@ -206,7 +207,8 @@ class MultiStepWorker(Worker):
             # make sure we are not last step
             # broadcast to other ranks
             # print('last rank, broadcasting')
-            if self.is_driver_worker:
+            if self.is_driver_worker and not model_input.is_last_step:
+                print('BROADCAST output:', model_input.outputs[-1].sampler_output.sampled_token_ids)
                 get_pp_group().broadcast(
                     model_input.outputs[-1].sampler_output.sampled_token_ids,
                     src=self.parallel_config.pipeline_parallel_size - 1,

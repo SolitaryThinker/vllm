@@ -241,7 +241,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             return self._base_model_runner.execute_model(
                 frozen_model_input, kv_caches, intermediate_tensors, num_steps)
 
-        debug_multi_step = False
+        debug_multi_step = True
         if debug_multi_step:
             print(
                 f'=======step {model_input.current_step} for {frozen_model_input.virtual_engine}============='
