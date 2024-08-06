@@ -812,6 +812,11 @@ class EngineArgs:
             disable_logprobs=self.disable_logprobs_during_spec_decoding,
         )
 
+        if speculative_config is not None and self.max_forward_calls_per_step > 1:
+            raise ValueError("Speculative decoding is not supported with "
+                             "multi-step or --max_forward_calls_per_step > 1")
+        # make sure num_lookahead_slots is set the higher value depending on
+        # if we are using speculative decoding or multi-step
         num_lookahead_slots = max(self.num_lookahead_slots,
                                   self.max_forward_calls_per_step - 1)
         num_lookahead_slots = num_lookahead_slots \
