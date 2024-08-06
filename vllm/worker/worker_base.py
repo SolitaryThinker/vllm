@@ -306,7 +306,6 @@ class LocalOrDistributedWorkerBase(WorkerBase):
             if self.kv_cache is not None else None, intermediate_tensors,
             num_steps)
 
-        self._handle_pipeline_parallel_output(model_input, output)
         if not get_pp_group().is_last_rank:
             # output is IntermediateTensors
             get_pp_group().send_tensor_dict(output.tensors,

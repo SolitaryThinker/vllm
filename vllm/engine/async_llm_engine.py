@@ -284,6 +284,8 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine].schedule()
 
             if scheduler_outputs.num_lookahead_slots > 0:
+                # cache the scheduler outputs for the next iteration if we have
+                # lookahead slots
                 self.cached_scheduler_outputs[
                     virtual_engine].seq_group_metadata_list = seq_group_metadata_list
                 self.cached_scheduler_outputs[
@@ -299,12 +301,17 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine].get_and_reset_finished_requests_ids()
 
             # check if we have a cached last_output from the previous iteration
+            # for PP this is probably the best way to pass the sampled_token_ids
+            # as a broadcast across stages will cause one virtual engine's stage
+            # to block another VE
             cached_last_output = self.cached_scheduler_outputs[
                 virtual_engine].last_output
-            if (cached_last_output is not None
+            # make sure we don't incur a GPU->CPU transfer if we don't need to
+            if (self.parallel_config.pipeline_parallel_size > 1
+                    and cached_last_output is not None
                     and cached_last_output.sampled_token_ids is not None):
-                last_sampled_token_ids = cached_last_output.sampled_token_ids.cpu(
-                )
+                last_sampled_token_ids = \
+                    cached_last_output.sampled_token_ids.cpu()
             else:
                 last_sampled_token_ids = None
 
@@ -335,6 +342,7 @@ class _AsyncLLMEngine(LLMEngine):
             seq_group.finish_step()
 
         if not self._has_remaining_steps(seq_group_metadata_list):
+            # clear the cache if we have finished all the steps
             self.cached_scheduler_outputs[
                 virtual_engine] = SchedulerOutputState()
             request_outputs = self._process_model_outputs(

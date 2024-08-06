@@ -81,8 +81,12 @@ class ModelOutput:
 
 @dataclass(frozen=False)
 class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
+    # actual frozen model input dataclass passed to _base_model_runner
     frozen_model_input: Optional[ModelInputForGPUWithSamplingMetadata] = None
+    # list of model outputs for each step, may not be all pythonized
     outputs: List[ModelOutput] = field(default_factory=list)
+    # used to pass sampled token ids from the last step to the current step for
+    # TP workers. Used to append to end of outputs and used by advance_step
     last_sampled_token_ids: Optional[torch.Tensor] = None
     current_step: int = 0
     is_multi_step: bool = True
@@ -97,7 +101,6 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
 
         tensor_dict = self.frozen_model_input.as_broadcastable_tensor_dict()
         new_tensor_dict = {
-            # 'outputs': self.outputs,
             'last_sampled_token_ids': self.last_sampled_token_ids,
             'current_step': self.current_step,
             'is_multi_step': self.is_multi_step,
@@ -115,7 +118,6 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
         tensor_dict: Dict[str, Any],
         attn_backend: Optional["AttentionBackend"] = None,
     ) -> "MutableModelInputForGPUWithMultiStepMetadata":
-        # print('from_broadcasted_tensor_dict', tensor_dict)
         tensor_dict = _init_sampling_metadata_from_tensor_dict(tensor_dict)
         if attn_backend is not None:
             tensor_dict = _init_attn_metadata_from_tensor_dict(
@@ -195,17 +197,12 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         )
         return model_input
 
-        # return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(
-        #     tensor_dict)
-
     def prepare_model_input(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
         virtual_engine: int = 0,
         finished_requests_ids: Optional[List[str]] = None
     ) -> MutableModelInputForGPUWithMultiStepMetadata:
-        # return self._base_model_runner.prepare_model_input(
-        #     seq_group_metadata_list, virtual_engine, finished_requests_ids)
         frozen_model_input = self._base_model_runner.prepare_model_input(
             seq_group_metadata_list, virtual_engine, finished_requests_ids)
 
@@ -266,7 +263,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                 frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
 
         # make sure we skip the sampler on the lask rank and only pythonize
-        # if CPU is ahead
+        # if CPU is ahead.
         if self.is_driver_worker and get_pp_group().is_last_rank:
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
             frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
@@ -370,14 +367,15 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             self, model_input: MutableModelInputForGPUWithMultiStepMetadata,
             out: SamplerOutput
     ) -> MutableModelInputForGPUWithMultiStepMetadata:
-        # model_input.current_step += 1
-        # assert model_input.seq_lens is not None
-        # assert model_input.query_lens is not None
         frozen_model_input = model_input.frozen_model_input
         assert frozen_model_input.attn_metadata is not None
 
         num_seqs = model_input.num_seqs
         num_queries = model_input.num_queries
+        assert num_seqs > 0
+        assert num_queries > 0
+        assert num_seqs >= num_queries
+
         attn_metadata = frozen_model_input.attn_metadata
         assert isinstance(attn_metadata, FlashAttentionMetadata)
         self._update_flash_attn_metadata(attn_metadata, num_seqs, num_queries)
@@ -401,19 +399,6 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         if frozen_model_input.seq_lens is not None:
             for i in range(num_queries):
                 frozen_model_input.seq_lens[i] = attn_metadata.seq_lens[i]
-
-        # new_frozen_model_input = ModelInputForGPUWithSamplingMetadata(
-        #     input_tokens=frozen_model_input.input_tokens,
-        #     input_positions=frozen_model_input.input_positions,
-        #     attn_metadata=attn_metadata,
-        #     seq_lens=attn_metadata.seq_lens,
-        #     query_lens=frozen_model_input.query_lens,
-        #     lora_mapping=frozen_model_input.lora_mapping,
-        #     lora_requests=frozen_model_input.lora_requests,
-        #     sampling_metadata=frozen_model_input.sampling_metadata,
-        #     is_prompt=False,
-        # )
-        # model_input.frozen_model_input = new_frozen_model_input
 
         return model_input
 
