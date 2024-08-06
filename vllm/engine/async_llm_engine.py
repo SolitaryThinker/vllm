@@ -324,8 +324,7 @@ class _AsyncLLMEngine(LLMEngine):
         if len(seq_group_metadata_list) == 0:
             return False
         steps_remaining = [
-            seq_group.state.remaining_steps
-            for seq_group in seq_group_metadata_list
+            seq_group.state.remaining_steps for seq_group in seq_group_metadata_list
         ]
         if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
             raise AssertionError(

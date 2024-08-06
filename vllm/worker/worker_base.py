@@ -14,7 +14,11 @@ from vllm.sequence import (ExecuteModelRequest, IntermediateTensors,
                            SamplerOutput)
 from vllm.utils import (enable_trace_function_call_for_thread,
                         update_environment_variables)
-from vllm.worker.model_runner_base import ModelRunnerBase, ModelRunnerInputBase
+from vllm.worker.model_runner_base import (ModelRunnerBase,
+                                           ModelRunnerInputBase, 
+                                           BroadcastableModelInput)
+
+
 
 logger = init_logger(__name__)
 
@@ -144,7 +148,7 @@ class WorkerInput:
             blocks_to_swap_out=tensor_dict.pop("blocks_to_swap_out"),
             blocks_to_copy=tensor_dict.pop("blocks_to_copy"),
             virtual_engine=tensor_dict["virtual_engine"],
-            num_steps=tensor_dict["num_steps"],
+            num_steps=tensor_dict.pop("num_steps"),
         )
 
     def as_broadcastable_tensor_dict(
@@ -217,7 +221,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
         raise NotImplementedError
 
     def _get_worker_input_from_broadcast(
-            self) -> Optional[Tuple[ModelRunnerInputBase, WorkerInput]]:
+            self) -> Optional[Tuple[BroadcastableModelInput, WorkerInput]]:
         """
         Get the worker input from the broadcasted tensor dict.
         """

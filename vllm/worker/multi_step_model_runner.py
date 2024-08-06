@@ -12,6 +12,8 @@ except ModuleNotFoundError:
 from ..model_executor.model_loader.tensorizer import TensorizerConfig
 from vllm.worker.model_runner_base import (
     ModelRunnerBase, ModelRunnerInputBase, ModelRunnerInputBuilderBase,
+    BroadcastableModelInput,
+    _init_frozen_model_input_from_tensor_dict,
     _add_attn_metadata_broadcastable_dict,
     _add_sampling_metadata_broadcastable_dict,
     _init_attn_metadata_from_tensor_dict,
@@ -78,24 +80,53 @@ class ModelOutput:
         return False
 
 
-# @dataclass(frozen=True)
-class ModelInputForGPUWithMultiStepMetadata(
-        ModelInputForGPUWithSamplingMetadata):
+@dataclass(frozen=False)
+class MutableModelInputForGPUWithMultiStepMetadata(
+        BroadcastableModelInput):
+    frozen_model_input: Optional[ModelInputForGPUWithSamplingMetadata] = None
     outputs: List[ModelOutput] = field(default_factory=list)
-    is_multi_step: bool = False
+    last_sampled_token_ids: Optional[torch.Tensor] = None
+    current_step: int = 0
+    is_multi_step: bool = True
     is_last_step: bool = False
     is_first_multi_step: bool = False
     step_cuda_events: List[torch.cuda.Event] = field(
         default_factory=lambda: [torch.cuda.Event(blocking=True)] * 2)
+    num_seqs: int = -1
+    num_queries: int = -1
 
-    def __init__(self, *args, **kwargs):
-        self.current_step = kwargs.pop('current_step', 0)
-        self.outputs = kwargs.pop('outputs', [])
-        self.is_multi_step = kwargs.pop('is_multi_step', False)
-        self.is_last_step = kwargs.pop('is_last_step', False)
-        self.is_first_multi_step = kwargs.pop('is_first_multi_step', False)
-        self.step_cuda_events = [torch.cuda.Event(blocking=True)] * 2
-        super().__init__(*args, **kwargs)
+
+    def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
+
+        tensor_dict = self.frozen_model_input.as_broadcastable_tensor_dict()
+        new_tensor_dict = {
+            # 'outputs': self.outputs, 
+            'last_sampled_token_ids': self.last_sampled_token_ids,
+            'current_step': self.current_step,
+            'is_multi_step': self.is_multi_step,
+            'is_last_step': self.is_last_step,
+            'is_first_multi_step': self.is_first_multi_step,
+            'num_seqs': self.num_seqs,
+            'num_queries': self.num_queries,
+        }
+        tensor_dict.update(new_tensor_dict)
+        return tensor_dict
+
+    @classmethod
+    def from_broadcasted_tensor_dict(
+            cls,
+            tensor_dict: Dict[str, Any],
+            attn_backend: Optional["AttentionBackend"] = None,
+    ) -> "MutableModelInputForGPUWithMultiStepMetadata":
+        # print('from_broadcasted_tensor_dict', tensor_dict)
+        tensor_dict = _init_sampling_metadata_from_tensor_dict(tensor_dict)
+        if attn_backend is not None:
+            tensor_dict = _init_attn_metadata_from_tensor_dict(
+                attn_backend, tensor_dict)
+        tensor_dict = _init_frozen_model_input_from_tensor_dict(
+            ModelInputForGPUWithSamplingMetadata, tensor_dict)
+
+        return cls(**tensor_dict)
 
     def record_step_event(self):
         self.step_cuda_events[self.current_step %
@@ -113,7 +144,7 @@ class ModelInputForGPUWithMultiStepMetadata(
 
 
 class MultiStepModelRunnerBase(
-        GPUModelRunnerBase[ModelInputForGPUWithMultiStepMetadata]):
+        GPUModelRunnerBase[MutableModelInputForGPUWithMultiStepMetadata]):
 
     def __init__(self, base_model_runner: ModelRunnerBase, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -125,22 +156,6 @@ class MultiStepModelRunnerBase(
         self.is_multi_step = self.scheduler_config.is_multi_step
         # used to copy tensors from GPU to CPU asynchronously
         self._copy_stream = torch.cuda.Stream()
-
-    def make_model_input_from_broadcasted_tensor_dict(
-            self,
-            tensor_dict: Dict[str,
-                              Any]) -> ModelInputForGPUWithSamplingMetadata:
-        return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(
-            tensor_dict)
-
-    def prepare_model_input(
-        self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
-        virtual_engine: int = 0,
-        finished_requests_ids: Optional[List[str]] = None
-    ) -> ModelInputForGPUWithSamplingMetadata:
-        return self._base_model_runner.prepare_model_input(
-            seq_group_metadata_list, virtual_engine, finished_requests_ids)
 
     def load_model(self) -> None:
         return self._base_model_runner.load_model()
@@ -174,10 +189,41 @@ class MultiStepModelRunnerBase(
 
 class MultiStepModelRunner(MultiStepModelRunnerBase):
 
+    def make_model_input_from_broadcasted_tensor_dict(
+            self,
+            tensor_dict: Dict[str,
+                              Any]) -> MutableModelInputForGPUWithMultiStepMetadata:
+        model_input = MutableModelInputForGPUWithMultiStepMetadata.from_broadcasted_tensor_dict(
+            tensor_dict,
+            attn_backend=self.attn_backend,
+        )
+        return model_input
+
+        # return self._base_model_runner.make_model_input_from_broadcasted_tensor_dict(
+        #     tensor_dict)
+
+    def prepare_model_input(
+        self,
+        seq_group_metadata_list: List[SequenceGroupMetadata],
+        virtual_engine: int = 0,
+        finished_requests_ids: Optional[List[str]] = None
+    ) -> MutableModelInputForGPUWithMultiStepMetadata:
+        # return self._base_model_runner.prepare_model_input(
+        #     seq_group_metadata_list, virtual_engine, finished_requests_ids)
+        frozen_model_input = self._base_model_runner.prepare_model_input(
+            seq_group_metadata_list, virtual_engine, finished_requests_ids)
+
+        model_input = MutableModelInputForGPUWithMultiStepMetadata(
+            frozen_model_input=frozen_model_input,
+            num_seqs=len(frozen_model_input.seq_lens),
+            num_queries=len(frozen_model_input.query_lens),
+        )
+        return model_input
+
     @torch.inference_mode()
     def execute_model(
         self,
-        model_input: ModelInputForGPUWithMultiStepMetadata,
+        model_input: MutableModelInputForGPUWithMultiStepMetadata,
         kv_caches: List[torch.Tensor],
         intermediate_tensors: Optional[IntermediateTensors] = None,
         num_steps: int = 1,
@@ -187,16 +233,18 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         metadata
         """
         assert num_steps == 1, "MultiStepModelRunner only supports num_steps=1"
+        frozen_model_input = model_input.frozen_model_input
+        assert frozen_model_input is not None
 
         # path for warm up runs
         if not model_input.is_multi_step:
             return self._base_model_runner.execute_model(
-                model_input, kv_caches, intermediate_tensors, num_steps)
+                frozen_model_input, kv_caches, intermediate_tensors, num_steps)
 
         debug_multi_step = False
         if debug_multi_step:
             print(
-                f'=======step {model_input.current_step} for {model_input.virtual_engine}============='
+                f'=======step {model_input.current_step} for {frozen_model_input.virtual_engine}============='
             )
             print(f'is_multi_step: {model_input.is_multi_step}')
             print(f'is_last_step: {model_input.is_last_step}')
@@ -212,27 +260,27 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         # explicitly block on the previous step's forward to make sure we
         # don't clobber any GPU tensors still in use
         if model_input.is_first_multi_step:
-            if model_input.sampling_metadata:
-                model_input.sampling_metadata.reuse_sampling_tensors = False
+            if frozen_model_input.sampling_metadata:
+                frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
         else:
             model_input.wait_previous_step()
             model_input = self._advance_step(
                 model_input, model_input.outputs[-1].sampler_output)
-            if model_input.sampling_metadata:
-                model_input.sampling_metadata.reuse_sampling_tensors = False
+            if frozen_model_input.sampling_metadata:
+                frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
 
         # make sure we skip the sampler on the lask rank and only pythonize
         # if CPU is ahead
         if self.is_driver_worker and get_pp_group().is_last_rank:
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
-            model_input.sampling_metadata.skip_sampler_cpu_output = True
+            frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
             for output in model_input.outputs:
-                output.maybe_pythonize(model_input, self._copy_stream)
+                output.maybe_pythonize(frozen_model_input, self._copy_stream)
 
         current_stream = torch.cuda.current_stream()
 
         # Execute the model
-        output = self._base_model_runner.execute_model(model_input,
+        output = self._base_model_runner.execute_model(frozen_model_input,
                                                        kv_caches,
                                                        intermediate_tensors,
                                                        num_steps=1)
@@ -264,7 +312,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         if model_input.is_last_step:
             outputs = []
             for output in model_input.outputs:
-                output.pythonize(model_input, self._copy_stream)
+                output.pythonize(frozen_model_input, self._copy_stream)
                 outputs.append(output.sampler_output)
             return outputs
 
@@ -323,16 +371,17 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             assert seq_group.query_len is None  # Decode
 
     def _advance_step(
-            self, model_input: ModelInputForGPUWithSamplingMetadata,
-            out: SamplerOutput) -> ModelInputForGPUWithSamplingMetadata:
+            self, model_input: MutableModelInputForGPUWithMultiStepMetadata,
+            out: SamplerOutput) -> MutableModelInputForGPUWithMultiStepMetadata:
         # model_input.current_step += 1
-        assert model_input.seq_lens is not None
-        assert model_input.query_lens is not None
-        assert model_input.attn_metadata is not None
+        # assert model_input.seq_lens is not None
+        # assert model_input.query_lens is not None
+        frozen_model_input = model_input.frozen_model_input
+        assert frozen_model_input.attn_metadata is not None
 
-        num_seqs = len(model_input.seq_lens)
-        num_queries = len(model_input.query_lens)
-        attn_metadata = model_input.attn_metadata
+        num_seqs = model_input.num_seqs
+        num_queries = model_input.num_queries
+        attn_metadata = frozen_model_input.attn_metadata
         assert isinstance(attn_metadata, FlashAttentionMetadata)
         self._update_flash_attn_metadata(attn_metadata, num_seqs, num_queries)
 
@@ -340,9 +389,9 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         ops.advance_step(num_seqs=num_seqs,
                          num_queries=num_queries,
                          block_size=self.block_size,
-                         input_tokens=model_input.input_tokens,
+                         input_tokens=frozen_model_input.input_tokens,
                          sampled_token_ids=out.sampled_token_ids,
-                         input_positions=model_input.input_positions,
+                         input_positions=frozen_model_input.input_positions,
                          seq_lens=attn_metadata.seq_lens_tensor,
                          slot_mapping=attn_metadata.slot_mapping,
                          block_tables=attn_metadata.block_tables)
@@ -352,9 +401,23 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         # sampling_metadata = model_input.sampling_metadata
         # self._update_sampling_metadata(sampling_metadata, num_seqs,
         #                                num_queries)
-        for i in range(num_queries):
-            model_input.seq_lens[i] = attn_metadata.seq_lens[i]
+        if frozen_model_input.seq_lens is not None:
+            for i in range(num_queries):
+                frozen_model_input.seq_lens[i] = attn_metadata.seq_lens[i]
 
+        new_frozen_model_input = ModelInputForGPUWithSamplingMetadata(
+            input_tokens=frozen_model_input.input_tokens,
+            input_positions=frozen_model_input.input_positions,
+            attn_metadata=attn_metadata,
+            seq_lens=attn_metadata.seq_lens,
+            query_lens=frozen_model_input.query_lens,
+            lora_mapping=frozen_model_input.lora_mapping,
+            lora_requests=frozen_model_input.lora_requests,
+            sampling_metadata=frozen_model_input.sampling_metadata,
+            is_prompt=False,
+        )
+        model_input.frozen_model_input = new_frozen_model_input
+            
         return model_input
 
 
