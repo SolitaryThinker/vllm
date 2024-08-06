@@ -241,7 +241,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             return self._base_model_runner.execute_model(
                 frozen_model_input, kv_caches, intermediate_tensors, num_steps)
 
-        debug_multi_step = True
+        debug_multi_step = False
         if debug_multi_step:
             print(
                 f'=======step {model_input.current_step} for {frozen_model_input.virtual_engine}============='
@@ -405,18 +405,18 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             for i in range(num_queries):
                 frozen_model_input.seq_lens[i] = attn_metadata.seq_lens[i]
 
-        new_frozen_model_input = ModelInputForGPUWithSamplingMetadata(
-            input_tokens=frozen_model_input.input_tokens,
-            input_positions=frozen_model_input.input_positions,
-            attn_metadata=attn_metadata,
-            seq_lens=attn_metadata.seq_lens,
-            query_lens=frozen_model_input.query_lens,
-            lora_mapping=frozen_model_input.lora_mapping,
-            lora_requests=frozen_model_input.lora_requests,
-            sampling_metadata=frozen_model_input.sampling_metadata,
-            is_prompt=False,
-        )
-        model_input.frozen_model_input = new_frozen_model_input
+        # new_frozen_model_input = ModelInputForGPUWithSamplingMetadata(
+        #     input_tokens=frozen_model_input.input_tokens,
+        #     input_positions=frozen_model_input.input_positions,
+        #     attn_metadata=attn_metadata,
+        #     seq_lens=attn_metadata.seq_lens,
+        #     query_lens=frozen_model_input.query_lens,
+        #     lora_mapping=frozen_model_input.lora_mapping,
+        #     lora_requests=frozen_model_input.lora_requests,
+        #     sampling_metadata=frozen_model_input.sampling_metadata,
+        #     is_prompt=False,
+        # )
+        # model_input.frozen_model_input = new_frozen_model_input
             
         return model_input
 

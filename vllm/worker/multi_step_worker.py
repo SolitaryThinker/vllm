@@ -49,9 +49,6 @@ class MultiStepWorker(Worker):
                     execute_model_req.seq_group_metadata_list,
                     execute_model_req.virtual_engine,
                     execute_model_req.finished_requests_ids))
-            print('after prepare_model_input')
-            print('num_queries:', len(model_input.frozen_model_input.query_lens))
-            print('num_seqs:', len(model_input.frozen_model_input.seq_lens))
             assert isinstance(model_input, MutableModelInputForGPUWithMultiStepMetadata)
             # assert model_input.frozen_model_input.sampling_metadata
         else:
@@ -64,9 +61,17 @@ class MultiStepWorker(Worker):
 
         # we broadcast the last sampled token ids to all TP workers so they can 
         # update their model input metadata inplace.
-        if not is_first_multi_step and get_pp_group().is_last_rank:
-            model_input.last_sampled_token_ids = model_input.outputs[-1].sampler_output.sampled_token_ids
-
+        if not is_first_multi_step:
+            if get_pp_group().is_last_rank:
+                model_input.last_sampled_token_ids = model_input.outputs[-1].sampler_output.sampled_token_ids
+            else:
+                # otherwise we need to get the cached sampled token ids from the
+                # execute_model_req
+                assert execute_model_req.last_sampled_token_ids is not None
+                model_input.last_sampled_token_ids = execute_model_req.last_sampled_token_ids.cuda()
+                model_input.add_sampler_output(
+                    SamplerOutput(outputs=[], sampled_token_ids=model_input.last_sampled_token_ids))
+                
         if self.do_metadata_broadcast:
             broadcast_data = worker_input.as_broadcastable_tensor_dict()
             broadcast_data.update(model_input.as_broadcastable_tensor_dict())
@@ -163,60 +168,3 @@ class MultiStepWorker(Worker):
         assert model_input is not None
         assert worker_input is not None
         return model_input, worker_input
-
-    def _handle_pipeline_parallel_output(
-            self, model_input: MutableModelInputForGPUWithMultiStepMetadata,
-            output: Union[IntermediateTensors, List[SamplerOutput]]) -> None:
-        """
-        Need to handle the output of the model differently in the case of
-        MultiStepWorker.  
-        Only the driver worker of the last rank samples the next token ids. This
-        needs to be broadcasted to all other ranks so that they are able to
-        update the next step's input metadata inplace.  
-        """
-        if not get_pp_group().is_last_rank:
-            # output is IntermediateTensors
-            get_pp_group().send_tensor_dict(output.tensors)
-
-        num_seqs = model_input.num_queries
-        print('num_seqs:', num_seqs)
-        print('num_queries:', model_input.num_queries)
-        if not get_pp_group().is_last_rank:
-            # recieve broadcast from last rank if 
-            #   - not last rank
-            #   - not last step
-            #   - is driver worker
-            if self.is_driver_worker and not model_input.is_last_step:
-                output = torch.zeros((num_seqs, 1),
-                                    dtype=torch.long,
-                                    device=self.device)
-                get_pp_group().broadcast(
-                    output,
-                    src=self.parallel_config.pipeline_parallel_size - 1,
-                    async_op=True)
-                print('output:', output)
-                model_input.add_sampler_output(sampler_output=SamplerOutput(
-                    outputs=[], sampled_token_ids=output), )
-
-            # output = get_pp_group().broadcast_tensor_dict(
-            #     src=self.parallel_config.pipeline_parallel_size - 1)
-            # model_input.add_sampler_output(sampler_output=SamplerOutput(
-            #     outputs=[], sampled_token_ids=output["sampled_token_ids"]), )
-            # print('non last rank broadcast received')
-        else:
-            # make sure we are not last step
-            # broadcast to other ranks
-            # print('last rank, broadcasting')
-            if self.is_driver_worker and not model_input.is_last_step:
-                print('BROADCAST output:', model_input.outputs[-1].sampler_output.sampled_token_ids)
-                get_pp_group().broadcast(
-                    model_input.outputs[-1].sampler_output.sampled_token_ids,
-                    src=self.parallel_config.pipeline_parallel_size - 1,
-                    async_op=True)
-            # get_pp_group().broadcast_tensor_dict(
-            #     {
-            #         "sampled_token_ids":
-            #         model_input.outputs[-1].sampler_output.sampled_token_ids
-            #     },
-            #     src=self.parallel_config.pipeline_parallel_size - 1)
-            # print('last rank broadcasted')

@@ -3,6 +3,7 @@ import time
 from functools import partial
 from typing import (AsyncGenerator, Callable, Dict, Iterable, List, Mapping,
                     Optional, Set, Tuple, Type, Union)
+from dataclasses import dataclass
 
 from transformers import PreTrainedTokenizer
 
@@ -238,6 +239,12 @@ class RequestTracker:
     def has_new_requests(self):
         return not self._new_requests.empty()
 
+@dataclass
+class SchedulerOutputState:
+    """Caches the scheduler outputs for a virtual engine. Used for Multi-Step"""
+    last_output: Optional[SamplerOutput] = None
+    seq_group_metadata_list: Optional[List[SequenceGroupMetadata]] = None
+    scheduler_outputs: Optional[SchedulerOutputs] = None
 
 class _AsyncLLMEngine(LLMEngine):
     """Extension of LLMEngine to add async methods."""
@@ -246,7 +253,7 @@ class _AsyncLLMEngine(LLMEngine):
         super().__init__(*args, **kwargs)
         pipeline_parallel_size = \
             self.parallel_config.pipeline_parallel_size
-        self.cached_scheduler_outputs = [(None, None)] * pipeline_parallel_size
+        self.cached_scheduler_outputs = [SchedulerOutputState()] * pipeline_parallel_size
 
     async def step_async(
         self, virtual_engine: int
@@ -260,9 +267,12 @@ class _AsyncLLMEngine(LLMEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
-        seq_group_metadata_list, scheduler_outputs = self.cached_scheduler_outputs[
-            virtual_engine]
-
+        # these are cached outputs from previous iterations. None if on first
+        # iteration
+        cached_outputs = self.cached_scheduler_outputs[virtual_engine]
+        seq_group_metadata_list = cached_outputs.seq_group_metadata_list
+        scheduler_outputs = cached_outputs.scheduler_outputs
+        cached_last_output = cached_outputs.last_output
         # skip the scheduler if there are any remaining steps in the seq groups.
         # This ensures that the scheduler is only called again when the current
         # batch has completed.
@@ -271,17 +281,25 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine].schedule()
 
             if scheduler_outputs.num_lookahead_slots > 0:
-                self.cached_scheduler_outputs[virtual_engine] = (
-                    seq_group_metadata_list, scheduler_outputs)
+                self.cached_scheduler_outputs[virtual_engine].seq_group_metadata_list = seq_group_metadata_list
+                self.cached_scheduler_outputs[virtual_engine].scheduler_outputs = scheduler_outputs
+                self.cached_scheduler_outputs[virtual_engine].last_output = None
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
 
         if not scheduler_outputs.is_empty():
-            # Execute the model.
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
-            # perhaps find the min num_lookahead_slots from all seq groups
+            
+            # check if we have a cached last_output from the previous iteration 
+            cached_last_output = self.cached_scheduler_outputs[virtual_engine].last_output
+            if (cached_last_output is not None and 
+                cached_last_output.sampled_token_ids is not None):
+                last_sampled_token_ids = cached_last_output.sampled_token_ids.cpu()
+            else:
+                last_sampled_token_ids = None
+
             execute_model_req = ExecuteModelRequest(
                 seq_group_metadata_list=seq_group_metadata_list,
                 blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
@@ -290,15 +308,25 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine=virtual_engine,
                 num_lookahead_slots=scheduler_outputs.num_lookahead_slots,
                 running_queue_size=scheduler_outputs.running_queue_size,
-                finished_requests_ids=finished_requests_ids)
+                finished_requests_ids=finished_requests_ids,
+                last_sampled_token_ids=last_sampled_token_ids)
+            # Execute the model.
             output = await self.model_executor.execute_model_async(
                 execute_model_req)
+            # we need to do this here so that last step's sampled_token_ids can
+            # be passed to the next iteration. 
+            if len(output) > 0 and output[0] is not None:
+                last_output = output[-1]
+                self.cached_scheduler_outputs[virtual_engine].last_output = last_output
         else:
             output = []
 
+        # Finish the current step for all the sequence groups.
         for seq_group in seq_group_metadata_list:
             seq_group.finish_step()
+
         if not self._has_remaining_steps(seq_group_metadata_list):
+            self.cached_scheduler_outputs[virtual_engine] = SchedulerOutputState()
             request_outputs = self._process_model_outputs(
                 output, scheduler_outputs.scheduled_seq_groups,
                 scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)

@@ -1099,6 +1099,8 @@ class ExecuteModelRequest:
     num_steps: int = 1
     # Finished request ids since last step.
     finished_requests_ids: List[str] = field(default_factory=list)
+    # The last sampled token ids for multi step decoding.
+    last_sampled_token_ids: Optional[torch.Tensor] = None
 
     @property
     def is_first_multi_step(self) -> bool:
@@ -1134,4 +1136,5 @@ class ExecuteModelRequest:
             running_queue_size=self.running_queue_size,
             previous_hidden_states=self.previous_hidden_states,
             num_steps=self.num_steps,
-            finished_requests_ids=self.finished_requests_ids)
+            finished_requests_ids=self.finished_requests_ids,
+            last_sampled_token_ids=self.last_sampled_token_ids.clone())
