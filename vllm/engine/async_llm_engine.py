@@ -239,12 +239,14 @@ class RequestTracker:
     def has_new_requests(self):
         return not self._new_requests.empty()
 
+
 @dataclass
 class SchedulerOutputState:
     """Caches the scheduler outputs for a virtual engine. Used for Multi-Step"""
     last_output: Optional[SamplerOutput] = None
     seq_group_metadata_list: Optional[List[SequenceGroupMetadata]] = None
     scheduler_outputs: Optional[SchedulerOutputs] = None
+
 
 class _AsyncLLMEngine(LLMEngine):
     """Extension of LLMEngine to add async methods."""
@@ -253,7 +255,8 @@ class _AsyncLLMEngine(LLMEngine):
         super().__init__(*args, **kwargs)
         pipeline_parallel_size = \
             self.parallel_config.pipeline_parallel_size
-        self.cached_scheduler_outputs = [SchedulerOutputState()] * pipeline_parallel_size
+        self.cached_scheduler_outputs = [SchedulerOutputState()
+                                         ] * pipeline_parallel_size
 
     async def step_async(
         self, virtual_engine: int
@@ -281,9 +284,12 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine].schedule()
 
             if scheduler_outputs.num_lookahead_slots > 0:
-                self.cached_scheduler_outputs[virtual_engine].seq_group_metadata_list = seq_group_metadata_list
-                self.cached_scheduler_outputs[virtual_engine].scheduler_outputs = scheduler_outputs
-                self.cached_scheduler_outputs[virtual_engine].last_output = None
+                self.cached_scheduler_outputs[
+                    virtual_engine].seq_group_metadata_list = seq_group_metadata_list
+                self.cached_scheduler_outputs[
+                    virtual_engine].scheduler_outputs = scheduler_outputs
+                self.cached_scheduler_outputs[
+                    virtual_engine].last_output = None
 
         assert seq_group_metadata_list is not None
         assert scheduler_outputs is not None
@@ -291,12 +297,14 @@ class _AsyncLLMEngine(LLMEngine):
         if not scheduler_outputs.is_empty():
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
-            
-            # check if we have a cached last_output from the previous iteration 
-            cached_last_output = self.cached_scheduler_outputs[virtual_engine].last_output
-            if (cached_last_output is not None and 
-                cached_last_output.sampled_token_ids is not None):
-                last_sampled_token_ids = cached_last_output.sampled_token_ids.cpu()
+
+            # check if we have a cached last_output from the previous iteration
+            cached_last_output = self.cached_scheduler_outputs[
+                virtual_engine].last_output
+            if (cached_last_output is not None
+                    and cached_last_output.sampled_token_ids is not None):
+                last_sampled_token_ids = cached_last_output.sampled_token_ids.cpu(
+                )
             else:
                 last_sampled_token_ids = None
 
@@ -314,10 +322,11 @@ class _AsyncLLMEngine(LLMEngine):
             output = await self.model_executor.execute_model_async(
                 execute_model_req)
             # we need to do this here so that last step's sampled_token_ids can
-            # be passed to the next iteration. 
+            # be passed to the next iteration.
             if len(output) > 0 and output[0] is not None:
                 last_output = output[-1]
-                self.cached_scheduler_outputs[virtual_engine].last_output = last_output
+                self.cached_scheduler_outputs[
+                    virtual_engine].last_output = last_output
         else:
             output = []
 
@@ -326,7 +335,8 @@ class _AsyncLLMEngine(LLMEngine):
             seq_group.finish_step()
 
         if not self._has_remaining_steps(seq_group_metadata_list):
-            self.cached_scheduler_outputs[virtual_engine] = SchedulerOutputState()
+            self.cached_scheduler_outputs[
+                virtual_engine] = SchedulerOutputState()
             request_outputs = self._process_model_outputs(
                 output, scheduler_outputs.scheduled_seq_groups,
                 scheduler_outputs.ignored_seq_groups, seq_group_metadata_list)
@@ -352,7 +362,8 @@ class _AsyncLLMEngine(LLMEngine):
         if len(seq_group_metadata_list) == 0:
             return False
         steps_remaining = [
-            seq_group.state.remaining_steps for seq_group in seq_group_metadata_list
+            seq_group.state.remaining_steps
+            for seq_group in seq_group_metadata_list
         ]
         if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
             raise AssertionError(

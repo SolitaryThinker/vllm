@@ -12,8 +12,7 @@ except ModuleNotFoundError:
 from ..model_executor.model_loader.tensorizer import TensorizerConfig
 from vllm.worker.model_runner_base import (
     ModelRunnerBase, ModelRunnerInputBase, ModelRunnerInputBuilderBase,
-    BroadcastableModelInput,
-    _init_frozen_model_input_from_tensor_dict,
+    BroadcastableModelInput, _init_frozen_model_input_from_tensor_dict,
     _add_attn_metadata_broadcastable_dict,
     _add_sampling_metadata_broadcastable_dict,
     _init_attn_metadata_from_tensor_dict,
@@ -81,8 +80,7 @@ class ModelOutput:
 
 
 @dataclass(frozen=False)
-class MutableModelInputForGPUWithMultiStepMetadata(
-        BroadcastableModelInput):
+class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
     frozen_model_input: Optional[ModelInputForGPUWithSamplingMetadata] = None
     outputs: List[ModelOutput] = field(default_factory=list)
     last_sampled_token_ids: Optional[torch.Tensor] = None
@@ -95,12 +93,11 @@ class MutableModelInputForGPUWithMultiStepMetadata(
     num_seqs: int = -1
     num_queries: int = -1
 
-
     def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
 
         tensor_dict = self.frozen_model_input.as_broadcastable_tensor_dict()
         new_tensor_dict = {
-            # 'outputs': self.outputs, 
+            # 'outputs': self.outputs,
             'last_sampled_token_ids': self.last_sampled_token_ids,
             'current_step': self.current_step,
             'is_multi_step': self.is_multi_step,
@@ -114,9 +111,9 @@ class MutableModelInputForGPUWithMultiStepMetadata(
 
     @classmethod
     def from_broadcasted_tensor_dict(
-            cls,
-            tensor_dict: Dict[str, Any],
-            attn_backend: Optional["AttentionBackend"] = None,
+        cls,
+        tensor_dict: Dict[str, Any],
+        attn_backend: Optional["AttentionBackend"] = None,
     ) -> "MutableModelInputForGPUWithMultiStepMetadata":
         # print('from_broadcasted_tensor_dict', tensor_dict)
         tensor_dict = _init_sampling_metadata_from_tensor_dict(tensor_dict)
@@ -190,9 +187,8 @@ class MultiStepModelRunnerBase(
 class MultiStepModelRunner(MultiStepModelRunnerBase):
 
     def make_model_input_from_broadcasted_tensor_dict(
-            self,
-            tensor_dict: Dict[str,
-                              Any]) -> MutableModelInputForGPUWithMultiStepMetadata:
+        self, tensor_dict: Dict[str, Any]
+    ) -> MutableModelInputForGPUWithMultiStepMetadata:
         model_input = MutableModelInputForGPUWithMultiStepMetadata.from_broadcasted_tensor_dict(
             tensor_dict,
             attn_backend=self.attn_backend,
@@ -372,7 +368,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
 
     def _advance_step(
             self, model_input: MutableModelInputForGPUWithMultiStepMetadata,
-            out: SamplerOutput) -> MutableModelInputForGPUWithMultiStepMetadata:
+            out: SamplerOutput
+    ) -> MutableModelInputForGPUWithMultiStepMetadata:
         # model_input.current_step += 1
         # assert model_input.seq_lens is not None
         # assert model_input.query_lens is not None
@@ -417,7 +414,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         #     is_prompt=False,
         # )
         # model_input.frozen_model_input = new_frozen_model_input
-            
+
         return model_input
 
 

@@ -49,7 +49,8 @@ class MultiStepWorker(Worker):
                     execute_model_req.seq_group_metadata_list,
                     execute_model_req.virtual_engine,
                     execute_model_req.finished_requests_ids))
-            assert isinstance(model_input, MutableModelInputForGPUWithMultiStepMetadata)
+            assert isinstance(model_input,
+                              MutableModelInputForGPUWithMultiStepMetadata)
             # assert model_input.frozen_model_input.sampling_metadata
         else:
             multi_step_state = self.multi_step_states[virtual_engine]
@@ -59,19 +60,23 @@ class MultiStepWorker(Worker):
         model_input.is_first_multi_step = is_first_multi_step
         model_input.is_last_step = execute_model_req.is_last_step
 
-        # we broadcast the last sampled token ids to all TP workers so they can 
+        # we broadcast the last sampled token ids to all TP workers so they can
         # update their model input metadata inplace.
         if not is_first_multi_step:
             if get_pp_group().is_last_rank:
-                model_input.last_sampled_token_ids = model_input.outputs[-1].sampler_output.sampled_token_ids
+                model_input.last_sampled_token_ids = model_input.outputs[
+                    -1].sampler_output.sampled_token_ids
             else:
                 # otherwise we need to get the cached sampled token ids from the
                 # execute_model_req
                 assert execute_model_req.last_sampled_token_ids is not None
-                model_input.last_sampled_token_ids = execute_model_req.last_sampled_token_ids.cuda()
+                model_input.last_sampled_token_ids = execute_model_req.last_sampled_token_ids.cuda(
+                )
                 model_input.add_sampler_output(
-                    SamplerOutput(outputs=[], sampled_token_ids=model_input.last_sampled_token_ids))
-                
+                    SamplerOutput(
+                        outputs=[],
+                        sampled_token_ids=model_input.last_sampled_token_ids))
+
         if self.do_metadata_broadcast:
             broadcast_data = worker_input.as_broadcastable_tensor_dict()
             broadcast_data.update(model_input.as_broadcastable_tensor_dict())
@@ -82,7 +87,8 @@ class MultiStepWorker(Worker):
     def prepare_input(
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None,
-    ) -> Optional[Tuple[MutableModelInputForGPUWithMultiStepMetadata, WorkerInput]]:
+    ) -> Optional[Tuple[MutableModelInputForGPUWithMultiStepMetadata,
+                        WorkerInput]]:
         """
         Depending on the current state of the request and multi step worker,
         this method may skip the normal _prepare_model_input and
@@ -103,7 +109,8 @@ class MultiStepWorker(Worker):
             model_input, worker_input = self._get_driver_input_and_broadcast(
                 execute_model_req)
             if execute_model_req.is_first_multi_step:
-                assert isinstance(model_input, MutableModelInputForGPUWithMultiStepMetadata)
+                assert isinstance(
+                    model_input, MutableModelInputForGPUWithMultiStepMetadata)
                 self.multi_step_states[virtual_engine] = MultiStepState(
                     worker_input=worker_input, model_input=model_input)
                 # model_input = MutableModelInputForGPUWithMultiStepMetadata(
@@ -147,7 +154,8 @@ class MultiStepWorker(Worker):
             if broadcast_data is None:
                 return None
             model_input, worker_input = broadcast_data
-            assert isinstance(model_input, MutableModelInputForGPUWithMultiStepMetadata)
+            assert isinstance(model_input,
+                              MutableModelInputForGPUWithMultiStepMetadata)
             virtual_engine = worker_input.virtual_engine
             if model_input.is_first_multi_step:
                 self.multi_step_states[virtual_engine] = MultiStepState(
@@ -157,9 +165,11 @@ class MultiStepWorker(Worker):
                 model_input = multi_step_state.model_input
                 worker_input = multi_step_state.worker_input
                 model_input.add_sampler_output(
-                    SamplerOutput(outputs=[], sampled_token_ids=model_input.last_sampled_token_ids))
-                assert isinstance(model_input,
-                                  MutableModelInputForGPUWithMultiStepMetadata)
+                    SamplerOutput(
+                        outputs=[],
+                        sampled_token_ids=model_input.last_sampled_token_ids))
+                assert isinstance(
+                    model_input, MutableModelInputForGPUWithMultiStepMetadata)
                 # assert model_input.num_steps == worker_input.num_steps
                 # # input should be cached and ready to go already.
                 # self.multi_step_states[virtual_engine] = MultiStepState(

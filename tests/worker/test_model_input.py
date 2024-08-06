@@ -157,6 +157,7 @@ def test_embedding_model_runner_input():
     # Pooling metadata is not broadcast.
     assert received_model_input.pooling_metadata is None
 
+
 def test_multi_step_model_runner_input():
     sampling_metadata = SamplingMetadata(
         ["seq_group"],
@@ -181,21 +182,22 @@ def test_multi_step_model_runner_input():
         is_last_step=True,
         is_first_multi_step=False,
         current_step=4,
-        last_sampled_token_ids=torch.ones((10,1)),
+        last_sampled_token_ids=torch.ones((10, 1)),
         is_multi_step=True,
         num_queries=8,
         num_seqs=5,
         outputs=[],
     )
 
-    assert isinstance(model_input, MutableModelInputForGPUWithMultiStepMetadata)
+    assert isinstance(model_input,
+                      MutableModelInputForGPUWithMultiStepMetadata)
 
     # Test round trip serialization.
     tensor_dict = model_input.as_broadcastable_tensor_dict()
     attn_backend = MockAttentionBackend()
-    received_model_input = (
-        MutableModelInputForGPUWithMultiStepMetadata.from_broadcasted_tensor_dict(
-            tensor_dict, attn_backend=attn_backend))
+    received_model_input = (MutableModelInputForGPUWithMultiStepMetadata.
+                            from_broadcasted_tensor_dict(
+                                tensor_dict, attn_backend=attn_backend))
 
     receieved_frozen_input = received_model_input.frozen_model_input
 
@@ -203,11 +205,11 @@ def test_multi_step_model_runner_input():
     assert isinstance(received_model_input,
                       MutableModelInputForGPUWithMultiStepMetadata)
     assert receieved_frozen_input.input_tokens is not None
-    assert (
-        receieved_frozen_input.input_tokens == frozen_model_input.input_tokens).all()
+    assert (receieved_frozen_input.input_tokens ==
+            frozen_model_input.input_tokens).all()
     assert receieved_frozen_input.input_positions is not None
-    assert (receieved_frozen_input.input_positions == frozen_model_input.input_positions
-            ).all()
+    assert (receieved_frozen_input.input_positions ==
+            frozen_model_input.input_positions).all()
     assert receieved_frozen_input.multi_modal_kwargs is None
     assert (frozen_model_input.multi_modal_kwargs ==
             frozen_model_input.multi_modal_kwargs)
@@ -227,5 +229,6 @@ def test_multi_step_model_runner_input():
     assert received_model_input.is_last_step == model_input.is_last_step
     assert received_model_input.is_first_multi_step == model_input.is_first_multi_step
     assert received_model_input.current_step == model_input.current_step
-    assert (received_model_input.last_sampled_token_ids == model_input.last_sampled_token_ids).all()
+    assert (received_model_input.last_sampled_token_ids ==
+            model_input.last_sampled_token_ids).all()
     assert received_model_input.is_multi_step == model_input.is_multi_step

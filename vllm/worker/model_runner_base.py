@@ -80,9 +80,10 @@ def _add_sampling_metadata_broadcastable_dict(
         tensor_dict["selected_token_indices"] = (
             sampling_metadata.selected_token_indices)
 
+
 def _init_frozen_model_input_from_tensor_dict(
-    frozen_model_input_cls: Type["ModelRunnerInputBase"],
-    tensor_dict: Dict[str, Any]) -> Dict[str, Any]:
+        frozen_model_input_cls: Type["ModelRunnerInputBase"],
+        tensor_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Helper method to initialize a frozen ModelInput based on broadcastable
     """
@@ -96,7 +97,9 @@ def _init_frozen_model_input_from_tensor_dict(
     tensor_dict["frozen_model_input"] = frozen_model_input
     return tensor_dict
 
+
 class BroadcastableModelInput(ABC):
+
     def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
         """
         Extract broadcastable fields. Override for fields that require some
