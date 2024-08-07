@@ -10,6 +10,7 @@ from typing import (TYPE_CHECKING, Dict, List, Mapping, Optional, Set, Tuple,
                     Union, cast)
 
 import torch
+import numpy
 
 from vllm.inputs import is_valid_encoder_decoder_llm_inputs
 from vllm.lora.request import LoRARequest
@@ -965,6 +966,8 @@ class SamplerOutput:
 
     # On-device tensor containing the sampled token ids.
     sampled_token_ids: Optional[torch.Tensor] = None
+    # sampled_token_ids_numpy: Optional[List[int]] = None
+    sampled_token_ids_numpy: Optional[numpy.ndarray] = None
 
     # Spec decode metrics populated by workers.
     spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None

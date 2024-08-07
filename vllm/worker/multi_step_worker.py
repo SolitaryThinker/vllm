@@ -63,15 +63,16 @@ class MultiStepWorker(Worker):
         # update their model input metadata inplace.
         if not is_first_multi_step:
             if get_pp_group().is_last_rank:
-                assert model_input.outputs[-1].sampler_output.sampled_token_ids is not None
+                assert model_input.outputs[-1].sampler_output.sampled_token_ids is None
+                assert model_input.outputs[-1].sampled_token_ids is not None
                 model_input.last_sampled_token_ids = model_input.outputs[
-                    -1].sampler_output.sampled_token_ids
+                    -1].sampled_token_ids
                 # free sampled token ids from the previous step if it has been
                 # pythonized. Cannot free the last sampled token ids because
                 # we need it for GPU advance_step.
                 for output in model_input.outputs[:-1]:
                     if output.pythonized:
-                        output.sampler_output.sampled_token_ids = None
+                        output.sampled_token_ids = None
             else:
                 # otherwise we need to get the cached sampled token ids from the
                 # execute_model_req
@@ -81,13 +82,15 @@ class MultiStepWorker(Worker):
                 model_input.add_sampler_output(
                     SamplerOutput(
                         outputs=[],
-                        sampled_token_ids=model_input.last_sampled_token_ids))
+                        sampled_token_ids=None),
+                    model_input.last_sampled_token_ids)
+                    
                 # free sampled token ids from the previous step.
                 # TODO(will) we could reuse the sampled token ids tensor from
                 # the previous step instead.
                 for output in model_input.outputs[:-1]:
-                    output.sampler_output.sampled_token_ids = None
-                assert model_input.outputs[-1].sampler_output.sampled_token_ids is not None
+                    output.sampled_token_ids = None
+                assert model_input.outputs[-1].sampled_token_ids is not None
 
         if self.do_metadata_broadcast:
             broadcast_data = worker_input.as_broadcastable_tensor_dict()
@@ -160,7 +163,8 @@ class MultiStepWorker(Worker):
                 model_input.add_sampler_output(
                     SamplerOutput(
                         outputs=[],
-                        sampled_token_ids=model_input.last_sampled_token_ids))
+                        sampled_token_ids=None),
+                    model_input.last_sampled_token_ids)
                 # self.multi_step_states[virtual_engine] = MultiStepState(
                 #     worker_input=worker_input, model_input=model_input)
                 # model_input = cached_model_input

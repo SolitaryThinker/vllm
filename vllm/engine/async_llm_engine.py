@@ -6,6 +6,7 @@ from typing import (AsyncGenerator, Callable, Dict, Iterable, List, Mapping,
 from dataclasses import dataclass
 
 from transformers import PreTrainedTokenizer
+import torch
 
 import vllm.envs as envs
 from vllm.config import (DecodingConfig, EngineConfig, LoRAConfig, ModelConfig,
@@ -309,9 +310,13 @@ class _AsyncLLMEngine(LLMEngine):
             # make sure we don't incur a GPU->CPU transfer if we don't need to
             if (self.parallel_config.pipeline_parallel_size > 1
                     and cached_last_output is not None
-                    and cached_last_output.sampled_token_ids is not None):
-                last_sampled_token_ids = \
-                    cached_last_output.sampled_token_ids.cpu()
+                    and cached_last_output.sampled_token_ids_numpy is not None):
+                last_sampled_token_ids =  \
+                    torch.from_numpy(cached_last_output.sampled_token_ids_numpy)
+                # last_sampled_token_ids =  \
+                #     torch.Tensor(cached_last_output.sampled_token_ids_numpy).long()
+                # \
+                    # cached_last_output.sampled_token_ids.cpu()
             else:
                 last_sampled_token_ids = None
 
@@ -330,10 +335,14 @@ class _AsyncLLMEngine(LLMEngine):
                 execute_model_req)
             # we need to do this here so that last step's sampled_token_ids can
             # be passed to the next iteration.
-            if len(output) > 0 and output[0] is not None:
-                last_output = output[-1]
-                self.cached_scheduler_outputs[
-                    virtual_engine].last_output = last_output
+            if self.parallel_config.pipeline_parallel_size > 1:
+                if len(output) > 0 and output[0] is not None:
+                    last_output = output[-1]
+                    assert last_output.sampled_token_ids is None
+                    assert last_output.sampled_token_ids_numpy is not None
+                    assert last_output.sampled_token_probs is None
+                    self.cached_scheduler_outputs[
+                        virtual_engine].last_output = last_output
         else:
             output = []
 
