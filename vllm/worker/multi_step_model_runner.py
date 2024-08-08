@@ -26,7 +26,6 @@ from vllm.sequence import (IntermediateTensors, SamplerOutput,
                            CompletionSequenceGroupOutput, Logprob)
 from vllm import _custom_ops as ops
 
-
 import torch
 
 logger = init_logger(__name__)
@@ -48,39 +47,48 @@ class ModelOutput:
     sampled_token_ids: Optional[torch.Tensor] = None
     pythonized: bool = False
 
-    def pythonize(self, input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
-                  copy_stream: torch.cuda.Stream,
-                  pinned_sampled_token_buffer: torch.Tensor) -> None:
+    def pythonize(
+            self,
+            input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
+            copy_stream: torch.cuda.Stream,
+            pinned_sampled_token_buffer: torch.Tensor) -> None:
         """Pythonize the output. Blocking."""
         if not self.pythonized:
             self._pythonize_sampler_output_wait_on_event(
                 input_metadata, copy_stream, pinned_sampled_token_buffer)
             self.pythonized = True
 
-    def maybe_pythonize(self,
-                        input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
-                        copy_stream: torch.cuda.Stream,
-                        pinned_sampled_token_buffer: torch.Tensor) -> None:
+    def maybe_pythonize(
+            self,
+            input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
+            copy_stream: torch.cuda.Stream,
+            pinned_sampled_token_buffer: torch.Tensor) -> None:
         """Pythonize the output if ready, else return None. Non-blocking."""
         if not self.pythonized:
             self.pythonized = self._pythonize_sampler_output_if_event_ready(
                 input_metadata, copy_stream, pinned_sampled_token_buffer)
 
     def _pythonize_sampler_output_wait_on_event(
-            self, input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
+            self,
+            input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
             copy_stream: torch.cuda.Stream,
             pinned_sampled_token_buffer: torch.Tensor) -> None:
         self.sampler_output_ready_event.synchronize()
         with torch.cuda.stream(copy_stream):
-            _pythonize_sampler_output(input_metadata, self.sampler_output, pinned_sampled_token_buffer, self.sampled_token_ids)
+            _pythonize_sampler_output(input_metadata, self.sampler_output,
+                                      pinned_sampled_token_buffer,
+                                      self.sampled_token_ids)
 
     def _pythonize_sampler_output_if_event_ready(
-            self, input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
+            self,
+            input_metadata: "MutableModelInputForGPUWithMultiStepMetadata",
             copy_stream: torch.cuda.Stream,
             pinned_sampled_token_buffer: torch.Tensor) -> bool:
         if self.sampler_output_ready_event.query():
             with torch.cuda.stream(copy_stream):
-                _pythonize_sampler_output(input_metadata, self.sampler_output, pinned_sampled_token_buffer, self.sampled_token_ids)
+                _pythonize_sampler_output(input_metadata, self.sampler_output,
+                                          pinned_sampled_token_buffer,
+                                          self.sampled_token_ids)
             return True
         return False
 
@@ -142,7 +150,9 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
         self.step_cuda_events[(self.current_step + 1) % 2].wait()
         self.step_cuda_events[(self.current_step + 1) % 2] = None
 
-    def add_sampler_output(self, sampler_output: SamplerOutput, sampled_token_ids: Optional[torch.Tensor] = None):
+    def add_sampler_output(self,
+                           sampler_output: SamplerOutput,
+                           sampled_token_ids: Optional[torch.Tensor] = None):
         self.outputs.append(
             ModelOutput(sampler_output=sampler_output,
                         sampler_output_ready_event=None,
@@ -253,7 +263,6 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             print(f'current_step: {model_input.current_step}')
             print(f'is_first_multi_step: {model_input.is_first_multi_step}')
 
-
         # make sure we skip the sampler on the lask rank and only pythonize
         # if CPU is ahead.
         if self.is_driver_worker and get_pp_group().is_last_rank:
@@ -262,12 +271,14 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                 self.pinned_sampled_token_ids = torch.zeros(
                     (self.scheduler_config.max_num_seqs, 1),
                     dtype=torch.long,
-                    device="cpu", pin_memory=True)
+                    device="cpu",
+                    pin_memory=True)
 
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
             frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
             for output in model_input.outputs:
-                output.maybe_pythonize(model_input, self._copy_stream, self.pinned_sampled_token_ids)
+                output.maybe_pythonize(model_input, self._copy_stream,
+                                       self.pinned_sampled_token_ids)
 
         # some pre-execute model logic for multi-step:
         #   - if it's the first step, we need to reset the sampling tensors
@@ -288,8 +299,6 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             if frozen_model_input.sampling_metadata:
                 frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
 
-
-
         # Execute the model
         output = self._base_model_runner.execute_model(frozen_model_input,
                                                        kv_caches,
@@ -309,10 +318,12 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             output_ready_event = torch.cuda.Event()
             output_ready_event.record(current_stream)
             if self.parallel_config.pipeline_parallel_size > 1:
-                output[0].sampled_token_ids_numpy = output[0].sampled_token_ids.numpy(force=True)
+                output[0].sampled_token_ids_numpy = output[
+                    0].sampled_token_ids.numpy(force=True)
             # output[0].sampled_token_ids_numpy = output[0].sampled_token_ids.tolist()
             model_input.outputs.append(
-                ModelOutput(output[0], output_ready_event, output[0].sampled_token_ids, False))
+                ModelOutput(output[0], output_ready_event,
+                            output[0].sampled_token_ids, False))
             # make sure we dont try to serialize any GPU tensors
             output[0].sampled_token_ids = None
             output[0].sampled_token_probs = None
@@ -331,7 +342,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         if model_input.is_last_step:
             outputs = []
             for output in model_input.outputs:
-                output.pythonize(model_input, self._copy_stream, self.pinned_sampled_token_ids)
+                output.pythonize(model_input, self._copy_stream,
+                                 self.pinned_sampled_token_ids)
                 outputs.append(output.sampler_output)
             return outputs
 
@@ -407,16 +419,17 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         self._update_flash_attn_metadata(attn_metadata, num_seqs, num_queries)
 
         # Update GPU tensors
-        ops.advance_step(num_seqs=num_seqs,
-                         num_queries=num_queries,
-                         block_size=self.block_size,
-                         input_tokens=frozen_model_input.input_tokens,
-                        #  sampled_token_ids=out.sampled_token_ids,
-                         sampled_token_ids=model_input.outputs[-1].sampled_token_ids,
-                         input_positions=frozen_model_input.input_positions,
-                         seq_lens=attn_metadata.seq_lens_tensor,
-                         slot_mapping=attn_metadata.slot_mapping,
-                         block_tables=attn_metadata.block_tables)
+        ops.advance_step(
+            num_seqs=num_seqs,
+            num_queries=num_queries,
+            block_size=self.block_size,
+            input_tokens=frozen_model_input.input_tokens,
+            #  sampled_token_ids=out.sampled_token_ids,
+            sampled_token_ids=model_input.outputs[-1].sampled_token_ids,
+            input_positions=frozen_model_input.input_positions,
+            seq_lens=attn_metadata.seq_lens_tensor,
+            slot_mapping=attn_metadata.slot_mapping,
+            block_tables=attn_metadata.block_tables)
 
         # Update sampling_metadata
         # model_input.seq_lens = attn_metadata.seq_lens
@@ -432,8 +445,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
 
 def _pythonize_sampler_output(
         model_input: MutableModelInputForGPUWithMultiStepMetadata,
-        output: SamplerOutput,
-        pinned_sampled_token_buffer: torch.Tensor,
+        output: SamplerOutput, pinned_sampled_token_buffer: torch.Tensor,
         sampled_token_ids: Optional[torch.Tensor]) -> SamplerOutput:
     # TODO(will): fix logprobs
 
@@ -463,7 +475,7 @@ def _pythonize_sampler_output(
     sampling_metadata = frozen_model_input.sampling_metadata
 
     for (seq_group, sample_result) in zip(sampling_metadata.seq_groups,
-                                        samples_list):
+                                          samples_list):
         seq_ids = seq_group.seq_ids
         # next_token_ids, parent_ids = sample_result
         next_token_ids = sample_result
@@ -474,7 +486,7 @@ def _pythonize_sampler_output(
             # XXX Hard coded logprob
             seq_outputs.append(
                 SequenceOutput(seq_ids[parent_id], next_token_id,
-                            {next_token_id: Logprob(logprob=42)}))
+                               {next_token_id: Logprob(logprob=42)}))
         # print('CompletionSequenceGroupOutput', seq_outputs)
         output.outputs.append(CompletionSequenceGroupOutput(seq_outputs, None))
     assert len(output.outputs) > 0

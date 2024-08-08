@@ -63,7 +63,8 @@ class MultiStepWorker(Worker):
         # update their model input metadata inplace.
         if not is_first_multi_step:
             if get_pp_group().is_last_rank:
-                assert model_input.outputs[-1].sampler_output.sampled_token_ids is None
+                assert model_input.outputs[
+                    -1].sampler_output.sampled_token_ids is None
                 assert model_input.outputs[-1].sampled_token_ids is not None
                 model_input.last_sampled_token_ids = model_input.outputs[
                     -1].sampled_token_ids
@@ -80,11 +81,9 @@ class MultiStepWorker(Worker):
                 model_input.last_sampled_token_ids = execute_model_req.last_sampled_token_ids.cuda(
                 )
                 model_input.add_sampler_output(
-                    SamplerOutput(
-                        outputs=[],
-                        sampled_token_ids=None),
+                    SamplerOutput(outputs=[], sampled_token_ids=None),
                     model_input.last_sampled_token_ids)
-                    
+
                 # free sampled token ids from the previous step.
                 # TODO(will) we could reuse the sampled token ids tensor from
                 # the previous step instead.
@@ -96,7 +95,6 @@ class MultiStepWorker(Worker):
             broadcast_data = worker_input.as_broadcastable_tensor_dict()
             broadcast_data.update(model_input.as_broadcastable_tensor_dict())
             broadcast_tensor_dict(broadcast_data, src=0)
-
 
         return model_input, worker_input
 
@@ -161,9 +159,7 @@ class MultiStepWorker(Worker):
                 # we need to update the last sampled token ids in the model input
                 # for the workers so that they can run inplace advance_step
                 model_input.add_sampler_output(
-                    SamplerOutput(
-                        outputs=[],
-                        sampled_token_ids=None),
+                    SamplerOutput(outputs=[], sampled_token_ids=None),
                     model_input.last_sampled_token_ids)
                 # self.multi_step_states[virtual_engine] = MultiStepState(
                 #     worker_input=worker_input, model_input=model_input)

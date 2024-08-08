@@ -309,14 +309,14 @@ class _AsyncLLMEngine(LLMEngine):
                 virtual_engine].last_output
             # make sure we don't incur a GPU->CPU transfer if we don't need to
             if (self.parallel_config.pipeline_parallel_size > 1
-                    and cached_last_output is not None
-                    and cached_last_output.sampled_token_ids_numpy is not None):
+                    and cached_last_output is not None and
+                    cached_last_output.sampled_token_ids_numpy is not None):
                 last_sampled_token_ids =  \
                     torch.from_numpy(cached_last_output.sampled_token_ids_numpy)
                 # last_sampled_token_ids =  \
                 #     torch.Tensor(cached_last_output.sampled_token_ids_numpy).long()
                 # \
-                    # cached_last_output.sampled_token_ids.cpu()
+                # cached_last_output.sampled_token_ids.cpu()
             else:
                 last_sampled_token_ids = None
 
@@ -514,12 +514,6 @@ class AsyncLLMEngine:
 
         # Lazy initialized fields
         self._request_tracker: RequestTracker
-
-    def start_profile(self):
-        self.engine.model_executor._run_workers('start_profile')
-
-    def stop_profile(self):
-        self.engine.model_executor._run_workers('stop_profile')
 
     @classmethod
     def _get_executor_cls(
