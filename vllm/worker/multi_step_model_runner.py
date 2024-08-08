@@ -1,7 +1,6 @@
 import dataclasses
 from dataclasses import dataclass, field
-from typing import (TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type,
-                    TypeVar, Union)
+from typing import (TYPE_CHECKING, Any, Dict, List, Optional, Union)
 try:
     from vllm.attention.backends.flash_attn import FlashAttentionMetadata
 except ModuleNotFoundError:
@@ -11,22 +10,22 @@ except ModuleNotFoundError:
 
 from ..model_executor.model_loader.tensorizer import TensorizerConfig
 from vllm.worker.model_runner_base import (
-    ModelRunnerBase, ModelRunnerInputBase, ModelRunnerInputBuilderBase,
     BroadcastableModelInput, _init_frozen_model_input_from_tensor_dict,
-    _add_attn_metadata_broadcastable_dict,
-    _add_sampling_metadata_broadcastable_dict,
     _init_attn_metadata_from_tensor_dict,
     _init_sampling_metadata_from_tensor_dict)
-from vllm.worker.model_runner import ModelInputForGPUWithSamplingMetadata
-from vllm.worker.model_runner import GPUModelRunnerBase
+from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
+                                      GPUModelRunnerBase)
 from vllm.logger import init_logger
-from vllm.distributed import get_pp_group, get_tp_group
+from vllm.distributed import get_pp_group
 from vllm.sequence import (IntermediateTensors, SamplerOutput,
                            SequenceGroupMetadata, SequenceOutput,
                            CompletionSequenceGroupOutput, Logprob)
 from vllm import _custom_ops as ops
 
 import torch
+
+if TYPE_CHECKING:
+    from vllm.attention.backends.abstract import AttentionBackend
 
 logger = init_logger(__name__)
 
@@ -106,13 +105,13 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
     is_multi_step: bool = True
     is_last_step: bool = False
     is_first_multi_step: bool = False
-    step_cuda_events: List[Optional[torch.cuda.Event]] = field(
+    step_cuda_events: List[torch.cuda.Event] = field(
         default_factory=lambda: [torch.cuda.Event(blocking=True)] * 2)
     num_seqs: int = -1
     num_queries: int = -1
 
     def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
-
+        assert self.frozen_model_input is not None
         tensor_dict = self.frozen_model_input.as_broadcastable_tensor_dict()
         new_tensor_dict = {
             'last_sampled_token_ids': self.last_sampled_token_ids,
@@ -148,7 +147,6 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
 
     def wait_previous_step(self):
         self.step_cuda_events[(self.current_step + 1) % 2].wait()
-        self.step_cuda_events[(self.current_step + 1) % 2] = None
 
     def add_sampler_output(self,
                            sampler_output: SamplerOutput,
@@ -163,12 +161,12 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
 class MultiStepModelRunnerBase(
         GPUModelRunnerBase[MutableModelInputForGPUWithMultiStepMetadata]):
 
-    def __init__(self, base_model_runner: ModelRunnerBase, *args, **kwargs):
+    def __init__(self, base_model_runner: GPUModelRunnerBase, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         # uses the base model runner to execute the model and wraps it with
         # multi-step logic
-        self._base_model_runner: ModelRunnerBase = base_model_runner
+        self._base_model_runner: GPUModelRunnerBase = base_model_runner
 
         self.is_multi_step = self.scheduler_config.is_multi_step
         # used to copy tensors from GPU to CPU asynchronously
@@ -275,10 +273,11 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                     pin_memory=True)
 
             self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
-            frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
-            for output in model_input.outputs:
-                output.maybe_pythonize(model_input, self._copy_stream,
-                                       self.pinned_sampled_token_ids)
+            if frozen_model_input.sampling_metadata:
+                frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
+            for model_output in model_input.outputs:
+                model_output.maybe_pythonize(model_input, self._copy_stream,
+                                             self.pinned_sampled_token_ids)
 
         # some pre-execute model logic for multi-step:
         #   - if it's the first step, we need to reset the sampling tensors
@@ -309,8 +308,9 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
         model_input.record_step_event(current_stream)
 
         if get_pp_group().is_last_rank and self.is_driver_worker:
-            assert (len(output) == 1,
-                    "MultiStepModelRunner requires single-step base_models")
+            assert len(
+                output
+            ) == 1, "MultiStepModelRunner requires single-step base_models"
 
             # event for the pythonization so that we only pythonize if the
             # tensors are ready. May be able to be combined with the step event
@@ -406,6 +406,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             out: SamplerOutput
     ) -> MutableModelInputForGPUWithMultiStepMetadata:
         frozen_model_input = model_input.frozen_model_input
+        assert frozen_model_input is not None
         assert frozen_model_input.attn_metadata is not None
 
         num_seqs = model_input.num_seqs
@@ -450,8 +451,11 @@ def _pythonize_sampler_output(
     # TODO(will): fix logprobs
 
     assert sampled_token_ids is not None
-    # samples generation should have been skipped
+    assert model_input.frozen_model_input is not None
+
     frozen_model_input = model_input.frozen_model_input
+    assert frozen_model_input.sampling_metadata is not None
+    # samples generation should have been skipped
     assert not output.outputs
 
     pinned_buffer = pinned_sampled_token_buffer[:model_input.num_queries]

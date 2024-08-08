@@ -1,20 +1,14 @@
 from vllm.worker.worker import Worker
 from dataclasses import dataclass
 from vllm.worker.worker import WorkerInput
-from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
-                                      ModelRunnerInputBase)
 from vllm.worker.model_runner_base import BroadcastableModelInput
 from vllm.sequence import ExecuteModelRequest, SamplerOutput
 from vllm.distributed import broadcast_tensor_dict, get_pp_group
-from typing import Tuple, Optional, List, Union
-from vllm.worker.worker_base import IntermediateTensors
-import dataclasses
+from typing import Tuple, Optional, List
 from dataclasses import field
-import torch
-import gc
 
 from vllm.worker.multi_step_model_runner import (
-    MutableModelInputForGPUWithMultiStepMetadata, ModelOutput)
+    MutableModelInputForGPUWithMultiStepMetadata)
 
 
 @dataclass
@@ -44,13 +38,11 @@ class MultiStepWorker(Worker):
         if is_first_multi_step:
             worker_input: WorkerInput = self.prepare_worker_input(
                 execute_model_req=execute_model_req)
-            model_input: BroadcastableModelInput = (
+            model_input: MutableModelInputForGPUWithMultiStepMetadata = (
                 self.model_runner.prepare_model_input(
                     execute_model_req.seq_group_metadata_list,
                     execute_model_req.virtual_engine,
                     execute_model_req.finished_requests_ids))
-            assert isinstance(model_input,
-                              MutableModelInputForGPUWithMultiStepMetadata)
         else:
             multi_step_state = self.multi_step_states[virtual_engine]
             worker_input = multi_step_state.worker_input

@@ -139,12 +139,6 @@ class Worker(LocalOrDistributedWorkerBase):
     def _is_embedding_model(self):
         return is_embedding_model_config(self.model_config)
 
-    def start_profile(self):
-        self.profiler.start()
-
-    def stop_profile(self):
-        self.profiler.stop()
-
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until

@@ -108,6 +108,7 @@ class BroadcastableModelInput(ABC):
         raise NotImplementedError
 
     @classmethod
+    @abstractmethod
     def from_broadcasted_tensor_dict(
         cls: Type[T],
         tensor_dict: Dict[str, Any],
@@ -131,7 +132,26 @@ class ModelRunnerInputBase(BroadcastableModelInput):
     ModelRunnerInputBase subclass, add their required fields, and specify how to
     serialize/deserialize a ModelInput for broadcast between workers.
     """
-    pass
+
+    def as_broadcastable_tensor_dict(self) -> Dict[str, Any]:
+        """
+        Extract broadcastable fields. Override for fields that require some
+        custom deserialization.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def from_broadcasted_tensor_dict(
+        cls: Type[T],
+        tensor_dict: Dict[str, Any],
+        attn_backend: Optional["AttentionBackend"] = None,
+    ) -> T:
+        """
+        Pop fields from the given tensor_dict and populate a new instance of
+        ModelRunnerInputBase.
+        """
+        raise NotImplementedError
 
 
 class ModelRunnerInputBuilderBase(ABC, Generic[T]):

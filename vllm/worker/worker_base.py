@@ -238,7 +238,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
 
     def _get_driver_input_and_broadcast(
         self, execute_model_req: ExecuteModelRequest
-    ) -> Tuple[ModelRunnerInputBase, WorkerInput]:
+    ) -> Tuple[BroadcastableModelInput, WorkerInput]:
         """
         Get the driver input and broadcast it to other workers.
         """
@@ -261,7 +261,7 @@ class LocalOrDistributedWorkerBase(WorkerBase):
     def prepare_input(
         self,
         execute_model_req: Optional[ExecuteModelRequest] = None
-    ) -> Optional[Tuple[ModelRunnerInputBase, WorkerInput]]:
+    ) -> Optional[Tuple[BroadcastableModelInput, WorkerInput]]:
         """
         Prepare the inputs to ModelRunner and Worker.
         """
