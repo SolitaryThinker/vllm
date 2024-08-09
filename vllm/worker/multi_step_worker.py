@@ -1,14 +1,12 @@
-from vllm.worker.worker import Worker
 from dataclasses import dataclass
-from vllm.worker.worker import WorkerInput
-from vllm.worker.model_runner_base import BroadcastableModelInput
-from vllm.sequence import ExecuteModelRequest, SamplerOutput
-from vllm.distributed import broadcast_tensor_dict, get_pp_group
-from typing import Tuple, Optional, List
-from dataclasses import field
+from typing import List, Optional, Tuple
 
+from vllm.distributed import broadcast_tensor_dict, get_pp_group
+from vllm.sequence import ExecuteModelRequest, SamplerOutput
+from vllm.worker.model_runner_base import BroadcastableModelInput
 from vllm.worker.multi_step_model_runner import (
     MutableModelInputForGPUWithMultiStepMetadata)
+from vllm.worker.worker import Worker, WorkerInput
 
 
 @dataclass
@@ -70,8 +68,8 @@ class MultiStepWorker(Worker):
                 # otherwise we need to get the cached sampled token ids from the
                 # execute_model_req
                 assert execute_model_req.last_sampled_token_ids is not None
-                model_input.last_sampled_token_ids = execute_model_req.last_sampled_token_ids.cuda(
-                )
+                model_input.last_sampled_token_ids = (
+                    execute_model_req.last_sampled_token_ids.cuda())
                 model_input.add_sampler_output(
                     SamplerOutput(outputs=[], sampled_token_ids=None),
                     model_input.last_sampled_token_ids)
@@ -143,8 +141,9 @@ class MultiStepWorker(Worker):
 
                 assert isinstance(
                     model_input, MutableModelInputForGPUWithMultiStepMetadata)
-                # we need to update the last sampled token ids in the model input
-                # for the workers so that they can run inplace advance_step
+                # we need to update the last sampled token ids in the model
+                # input for the workers so that they can run inplace
+                # advance_step
                 model_input.add_sampler_output(
                     SamplerOutput(outputs=[], sampled_token_ids=None),
                     model_input.last_sampled_token_ids)

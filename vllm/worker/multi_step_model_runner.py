@@ -1,6 +1,6 @@
-import dataclasses
 from dataclasses import dataclass, field
-from typing import (TYPE_CHECKING, Any, Dict, List, Optional, Union)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
 try:
     from vllm.attention.backends.flash_attn import FlashAttentionMetadata
 except ModuleNotFoundError:
@@ -8,21 +8,22 @@ except ModuleNotFoundError:
     from vllm.attention.backends.rocm_flash_attn import (
         ROCmFlashAttentionMetadata as FlashAttentionMetadata)
 
-from ..model_executor.model_loader.tensorizer import TensorizerConfig
-from vllm.worker.model_runner_base import (
-    BroadcastableModelInput, _init_frozen_model_input_from_tensor_dict,
-    _init_attn_metadata_from_tensor_dict,
-    _init_sampling_metadata_from_tensor_dict)
-from vllm.worker.model_runner import (ModelInputForGPUWithSamplingMetadata,
-                                      GPUModelRunnerBase)
-from vllm.logger import init_logger
-from vllm.distributed import get_pp_group
-from vllm.sequence import (IntermediateTensors, SamplerOutput,
-                           SequenceGroupMetadata, SequenceOutput,
-                           CompletionSequenceGroupOutput, Logprob)
-from vllm import _custom_ops as ops
-
 import torch
+
+from vllm import _custom_ops as ops
+from vllm.distributed import get_pp_group
+from vllm.logger import init_logger
+from vllm.sequence import (CompletionSequenceGroupOutput, IntermediateTensors,
+                           Logprob, SamplerOutput, SequenceGroupMetadata,
+                           SequenceOutput)
+from vllm.worker.model_runner import (GPUModelRunnerBase,
+                                      ModelInputForGPUWithSamplingMetadata)
+from vllm.worker.model_runner_base import (
+    BroadcastableModelInput, _init_attn_metadata_from_tensor_dict,
+    _init_frozen_model_input_from_tensor_dict,
+    _init_sampling_metadata_from_tensor_dict)
+
+from ..model_executor.model_loader.tensorizer import TensorizerConfig
 
 if TYPE_CHECKING:
     from vllm.attention.backends.abstract import AttentionBackend
@@ -43,7 +44,8 @@ class ModelOutput:
 
     There are two scenarios:
     1. The output tensors are ready and we can pythonize them immediately.
-    2. The output tensors are not ready and we need to wait for the event to be ready.
+    2. The output tensors are not ready and we need to wait for the event to be
+    ready.
     """
     sampler_output: SamplerOutput
     sampler_output_ready_event: torch.cuda.Event
@@ -217,10 +219,11 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
     def make_model_input_from_broadcasted_tensor_dict(
         self, tensor_dict: Dict[str, Any]
     ) -> MutableModelInputForGPUWithMultiStepMetadata:
-        model_input = MutableModelInputForGPUWithMultiStepMetadata.from_broadcasted_tensor_dict(
-            tensor_dict,
-            attn_backend=self.attn_backend,
-        )
+        model_input = (MutableModelInputForGPUWithMultiStepMetadata.
+                       from_broadcasted_tensor_dict(
+                           tensor_dict,
+                           attn_backend=self.attn_backend,
+                       ))
         return model_input
 
     def prepare_model_input(
@@ -271,9 +274,11 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                     device="cpu",
                     pin_memory=True)
 
-            self._base_model_runner.model.sampler.include_gpu_probs_tensor = True
+            self._base_model_runner.model.sampler.include_gpu_probs_tensor = (
+                True)
             if frozen_model_input.sampling_metadata:
-                frozen_model_input.sampling_metadata.skip_sampler_cpu_output = True
+                frozen_model_input.sampling_metadata.skip_sampler_cpu_output = (
+                    True)
             # TODO(will) Will need to benchmark and look at torch profiler for
             # the exact location we should do this. If the CPU is very ahead, it
             # does not matter if we call this before executable or after, as the
@@ -296,7 +301,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             # changing batch sizes, will remove afterwards and potentially leave
             # comment for future optimization
             if frozen_model_input.sampling_metadata:
-                frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
+                frozen_model_input.sampling_metadata.reuse_sampling_tensors = (
+                    False)
         else:
             # This is not needed for flashattn backend, but for other attn
             # backends such as flashinfer that performs we may need to
@@ -309,7 +315,8 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
             # changing batch sizes, will remove afterwards and potentially leave
             # comment for future optimization
             if frozen_model_input.sampling_metadata:
-                frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
+                frozen_model_input.sampling_metadata.reuse_sampling_tensors = (
+                    False)
 
         # Execute the model
         output = self._base_model_runner.execute_model(frozen_model_input,

@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from typing import (TYPE_CHECKING, Dict, List, Mapping, Optional, Set, Tuple,
                     Union, cast)
 
-import torch
 import numpy
+import torch
 
 from vllm.inputs.parse import is_valid_encoder_decoder_llm_inputs
 from vllm.lora.request import LoRARequest
@@ -1147,21 +1147,24 @@ class ExecuteModelRequest:
 
     @property
     def is_first_multi_step(self) -> bool:
-        # TODO(will) make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of
+        # steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
         return first_seq_group.state.current_step == 0
 
     @property
     def is_last_step(self) -> bool:
-        # TODO(will) make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of
+        # steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
         return first_seq_group.state.remaining_steps == 1
 
     @property
     def current_step(self) -> int:
-        # TODO(will) make this be able to handle batches with variable number of steps
+        # TODO(will) make this be able to handle batches with variable number of
+        # steps
         assert len(self.seq_group_metadata_list) > 0
         return self.seq_group_metadata_list[0].state.current_step
 

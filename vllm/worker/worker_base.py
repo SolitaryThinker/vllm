@@ -16,9 +16,9 @@ from vllm.sequence import (ExecuteModelRequest, IntermediateTensors,
                            SamplerOutput)
 from vllm.utils import (enable_trace_function_call_for_thread,
                         update_environment_variables)
-from vllm.worker.model_runner_base import (ModelRunnerBase,
-                                           ModelRunnerInputBase,
-                                           BroadcastableModelInput)
+from vllm.worker.model_runner_base import (BroadcastableModelInput,
+                                           ModelRunnerBase,
+                                           ModelRunnerInputBase)
 
 logger = init_logger(__name__)
 

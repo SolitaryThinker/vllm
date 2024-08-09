@@ -1,13 +1,13 @@
 import asyncio
 import time
+from dataclasses import dataclass
 from functools import partial
 from typing import (AsyncGenerator, Callable, Dict, Iterable, List, Mapping,
                     Optional, Set, Tuple, Type, Union)
-from dataclasses import dataclass
 
+import torch
 from transformers import PreTrainedTokenizer
 from typing_extensions import assert_never
-import torch
 
 import vllm.envs as envs
 from vllm.config import (DecodingConfig, EngineConfig, LoRAConfig, ModelConfig,
@@ -31,7 +31,6 @@ from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import SamplingParams
 from vllm.sequence import (ExecuteModelRequest, SamplerOutput,
                            SequenceGroupMetadata)
-
 from vllm.usage.usage_lib import UsageContext
 
 logger = init_logger(__name__)
@@ -411,15 +410,15 @@ class _AsyncLLMEngine(LLMEngine):
     def _cache_output_for_multi_step(
             self, virtual_engine: int,
             output: List[Optional[SamplerOutput]]) -> None:
-        if (self.parallel_config.pipeline_parallel_size > 1):
-            if len(output) > 0 and output[0] is not None:
-                last_output = output[-1]
-                assert last_output is not None
-                assert last_output.sampled_token_ids_numpy is not None
-                assert last_output.sampled_token_ids is None
-                assert last_output.sampled_token_probs is None
-                self.cached_scheduler_outputs[
-                    virtual_engine].last_output = last_output
+        if (self.parallel_config.pipeline_parallel_size > 1 and len(output) > 0
+                and output[0] is not None):
+            last_output = output[-1]
+            assert last_output is not None
+            assert last_output.sampled_token_ids_numpy is not None
+            assert last_output.sampled_token_ids is None
+            assert last_output.sampled_token_probs is None
+            self.cached_scheduler_outputs[
+                virtual_engine].last_output = last_output
 
     async def stop_remote_worker_execution_loop_async(self) -> None:
         """Stop the remote worker execution loop."""
