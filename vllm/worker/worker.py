@@ -6,6 +6,7 @@ from typing import List, Optional, Set, Tuple, Type
 import torch
 import torch.distributed
 
+import vllm.envs as envs
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, MultiModalConfig, ObservabilityConfig,
                          ParallelConfig, PromptAdapterConfig, SchedulerConfig,
@@ -112,6 +113,34 @@ class Worker(LocalOrDistributedWorkerBase):
         self.cache_engine: List[CacheEngine]
         # Initialize gpu_cache as embedding models don't initialize kv_caches
         self.gpu_cache: Optional[List[List[torch.Tensor]]] = None
+
+        # Torch profiler. Enabled and configured through env vars:
+        # VLLM_TORCH_PROFILER=1
+        # VLLM_TORCH_PROFILER_TRACE_DIR=/mnt/traces/
+        # view traces using https://ui.perfetto.dev/
+        torch_profiler_enabled = envs.VLLM_TORCH_PROFILER
+        if torch_profiler_enabled:
+            torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_TRACE_DIR
+            self.profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                with_stack=True,
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    torch_profiler_trace_dir, use_gzip=True))
+        else: 
+            self.profiler = None
+
+    def start_profile(self):
+        if self.profiler is None:
+            raise RuntimeError("Profiler is not enabled.")
+        self.profiler.start()
+
+    def stop_profile(self):
+        if self.profiler is None:
+            raise RuntimeError("Profiler is not enabled.")
+        self.profiler.stop()
 
     def _is_encoder_decoder_model(self):
         return self.model_config.is_encoder_decoder_model
