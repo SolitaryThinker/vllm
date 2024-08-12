@@ -293,6 +293,7 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                 frozen_model_input.sampling_metadata.reuse_sampling_tensors = False
         else:
             model_input.wait_previous_step()
+            model_input.frozen_model_input.attn_metadata._cached_decode_metadata = None
             model_input = self._advance_step(
                 model_input, model_input.outputs[-1].sampler_output)
             if frozen_model_input.sampling_metadata:
