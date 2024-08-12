@@ -93,7 +93,7 @@ class EngineArgs:
     lora_dtype: str = 'auto'
     max_cpu_loras: Optional[int] = None
     device: str = 'auto'
-    max_forward_calls_per_step: int = 1
+    num_scheduler_steps: int = 1
     ray_workers_use_nsight: bool = False
     num_gpu_blocks_override: Optional[int] = None
     num_lookahead_slots: int = 0
@@ -507,10 +507,11 @@ class EngineArgs:
                                 "tpu", "xpu"
                             ],
                             help='Device type for vLLM execution.')
-        parser.add_argument('--max-forward-calls-per-step',
+        parser.add_argument('--num-scheduler-steps',
                             type=int,
                             default=1,
-                            help='Maximum number of forward calls per step.')
+                            help=('Maximum number of forward steps per '
+                                  'scheduler call.'))
 
         parser.add_argument(
             '--scheduler-delay-factor',
@@ -825,14 +826,13 @@ class EngineArgs:
             disable_logprobs=self.disable_logprobs_during_spec_decoding,
         )
 
-        if (speculative_config is not None
-                and self.max_forward_calls_per_step > 1):
+        if (speculative_config is not None and self.num_scheduler_steps > 1):
             raise ValueError("Speculative decoding is not supported with "
-                             "multi-step (--max_forward_calls_per_step > 1)")
+                             "multi-step (--num-scheduler-steps > 1)")
         # make sure num_lookahead_slots is set the higher value depending on
         # if we are using speculative decoding or multi-step
         num_lookahead_slots = max(self.num_lookahead_slots,
-                                  self.max_forward_calls_per_step - 1)
+                                  self.num_scheduler_steps - 1)
         num_lookahead_slots = num_lookahead_slots \
             if speculative_config is None \
             else speculative_config.num_lookahead_slots
@@ -847,7 +847,7 @@ class EngineArgs:
             enable_chunked_prefill=self.enable_chunked_prefill,
             embedding_mode=model_config.embedding_mode,
             preemption_mode=self.preemption_mode,
-            max_forward_calls_per_step=self.max_forward_calls_per_step,
+            num_scheduler_steps=self.num_scheduler_steps,
         )
         lora_config = LoRAConfig(
             max_lora_rank=self.max_lora_rank,

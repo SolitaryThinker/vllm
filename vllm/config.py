@@ -847,7 +847,7 @@ class SchedulerConfig:
                  enable_chunked_prefill: bool = False,
                  embedding_mode: Optional[bool] = False,
                  preemption_mode: Optional[str] = None,
-                 max_forward_calls_per_step: int = 1) -> None:
+                 num_scheduler_steps: int = 1) -> None:
         if max_num_batched_tokens is not None:
             self.max_num_batched_tokens = max_num_batched_tokens
         else:
@@ -876,7 +876,7 @@ class SchedulerConfig:
         self.chunked_prefill_enabled = enable_chunked_prefill
         self.embedding_mode = embedding_mode
         self.preemption_mode = preemption_mode
-        self.max_forward_calls_per_step = max_forward_calls_per_step
+        self.num_scheduler_steps = num_scheduler_steps
         self._verify_args()
 
     def _verify_args(self) -> None:
@@ -902,15 +902,15 @@ class SchedulerConfig:
                 f"({self.num_lookahead_slots}) must be greater than or "
                 "equal to 0.")
 
-        if self.max_forward_calls_per_step < 1:
+        if self.num_scheduler_steps < 1:
             raise ValueError(
-                "max_forward_calls_per_step "
-                f"({self.max_forward_calls_per_step}) must be greater than or "
+                "num_scheduler_steps "
+                f"({self.num_scheduler_steps}) must be greater than or "
                 "equal to 1.")
 
     @property
     def is_multi_step(self) -> bool:
-        return self.max_forward_calls_per_step > 1
+        return self.num_scheduler_steps > 1
 
 
 class DeviceConfig:
