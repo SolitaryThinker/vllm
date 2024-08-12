@@ -135,13 +135,14 @@ class MultiStepWorker(Worker):
             virtual_engine = worker_input.virtual_engine
             if model_input.is_first_multi_step:
                 pass
-                # cache the worker input and model input for the next steps
-                # TODO(will) see below
+                # TODO(will) Can cache the worker input and model input for the
+                # next steps. See below for details
             else:
-                # TODO(will) possible to also use the cached worker input and
-                # model input this can be done if we want to optimize the
-                # broadcast to only send the last sampled token ids for
-                # non-first multi steps
+                # TODO(will) possible to also cache and reuse the cached worker
+                # input and model input. The idea is essentially the delta
+                # optimization for model_inputs. Where the TP workers can cache
+                # the model input states and we only broadcast the delta need
+                # for the next step (sampled_token_ids from the previous step)
 
                 assert isinstance(
                     model_input, MutableModelInputForGPUWithMultiStepMetadata)
