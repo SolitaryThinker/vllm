@@ -368,16 +368,18 @@ class _AsyncLLMEngine(LLMEngine):
 
         if seq_group_metadata_list is None:
             return False
+
+        if not seq_group_metadata_list:
+            return False
+
         # TODO(will) this is a sanity check for nowto make sure that all the
         # seqs are on the same steps. Eventually we will want to do some sort of
         # dynamic scheduling when doing multi-step decoding.
-        if len(seq_group_metadata_list) == 0:
-            return False
-        steps_remaining = [
-            seq_group.state.remaining_steps
-            for seq_group in seq_group_metadata_list
-        ]
-        if steps_remaining.count(steps_remaining[0]) != len(steps_remaining):
+        ref_remaining_steps = seq_group_metadata_list[0].state.remaining_steps
+        if any([
+                seq_group.state.remaining_steps != ref_remaining_steps
+                for seq_group in seq_group_metadata_list[1:]
+        ]):
             raise AssertionError(("All running sequence groups should "
                                   "have the same remaining steps."))
 

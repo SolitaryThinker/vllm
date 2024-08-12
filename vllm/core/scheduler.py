@@ -806,8 +806,8 @@ class Scheduler:
             waiting_queue.popleft()
             self._allocate_and_set_running(seq_group)
             seq_group.init_multi_step(
-                num_lookahead_slots=self._get_num_lookahead_slots(
-                    is_prefill=True))
+                num_scheduler_steps=self._get_num_lookahead_slots(
+                    is_prefill=True) + 1)
             seq_groups.append(
                 ScheduledSequenceGroup(seq_group=seq_group,
                                        token_chunk_size=num_new_tokens))
@@ -1188,7 +1188,7 @@ class Scheduler:
                 slots.
         """
         num_lookahead_slots = self._get_num_lookahead_slots(is_prefill=False)
-        seq_group.init_multi_step(num_lookahead_slots=num_lookahead_slots)
+        seq_group.init_multi_step(num_scheduler_steps=num_lookahead_slots + 1)
 
         for seq in seq_group.get_seqs(status=SequenceStatus.RUNNING):
             cows = self.block_manager.append_slots(seq, num_lookahead_slots)

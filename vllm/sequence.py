@@ -495,10 +495,12 @@ class SequenceGroupState:
     """Mutable state tied to a specific sequence group"""
 
     # for multi-step decoding
-    num_lookahead_slots: int = 0
     num_steps: int = 1
-    remaining_steps: int = 0
     current_step: int = 0
+
+    @property
+    def remaining_steps(self) -> int:
+        return self.num_steps - self.current_step
 
 
 class SequenceGroup:
@@ -601,10 +603,8 @@ class SequenceGroup:
         return self.prompt_adapter_request.prompt_adapter_num_virtual_tokens\
                          if self.prompt_adapter_request else 0
 
-    def init_multi_step(self, num_lookahead_slots: int) -> None:
-        self.state.num_lookahead_slots = num_lookahead_slots
-        self.state.num_steps = num_lookahead_slots + 1
-        self.state.remaining_steps = num_lookahead_slots + 1
+    def init_multi_step(self, num_scheduler_steps: int) -> None:
+        self.state.num_steps = num_scheduler_steps
         self.state.current_step = 0
 
     def get_last_latency(self, now: float) -> Optional[float]:
@@ -859,8 +859,6 @@ class SequenceGroupMetadata:
     def finish_step(self) -> None:
         assert self.state.current_step < self.state.num_steps
         self.state.current_step += 1
-        self.state.remaining_steps -= 1
-        assert self.state.remaining_steps >= 0
 
 
 class SequenceOutput:
@@ -999,7 +997,6 @@ class SamplerOutput:
 
     # On-device tensor containing the sampled token ids.
     sampled_token_ids: Optional[torch.Tensor] = None
-    # sampled_token_ids_numpy: Optional[List[int]] = None
     sampled_token_ids_numpy: Optional[numpy.ndarray] = None
 
     # Spec decode metrics populated by workers.
@@ -1159,7 +1156,9 @@ class ExecuteModelRequest:
         # steps
         assert len(self.seq_group_metadata_list) > 0
         first_seq_group = self.seq_group_metadata_list[0]
-        return first_seq_group.state.remaining_steps == 1
+        num_steps = first_seq_group.state.num_steps
+        current_step = first_seq_group.state.current_step
+        return num_steps - current_step == 1
 
     @property
     def current_step(self) -> int:
