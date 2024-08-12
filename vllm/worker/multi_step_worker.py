@@ -45,8 +45,11 @@ class MultiStepWorker(Worker):
             multi_step_state = self.multi_step_states[virtual_engine]
             worker_input = multi_step_state.worker_input
             model_input = multi_step_state.model_input
-            model_input.frozen_model_input.attn_metadata._cached_decode_metadata = None
-
+            frozen_model_input = model_input.frozen_model_input
+            assert frozen_model_input is not None
+            assert frozen_model_input.attn_metadata is not None
+            # clear the cached decode metadata so that it can be recomputed
+            frozen_model_input.attn_metadata._cached_decode_metadata = None
 
         model_input.is_first_multi_step = is_first_multi_step
         model_input.is_last_step = execute_model_req.is_last_step
