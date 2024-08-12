@@ -45,6 +45,8 @@ class MultiStepWorker(Worker):
             multi_step_state = self.multi_step_states[virtual_engine]
             worker_input = multi_step_state.worker_input
             model_input = multi_step_state.model_input
+            model_input.frozen_model_input.attn_metadata._cached_decode_metadata = None
+
 
         model_input.is_first_multi_step = is_first_multi_step
         model_input.is_last_step = execute_model_req.is_last_step
@@ -80,7 +82,6 @@ class MultiStepWorker(Worker):
                 for output in model_input.outputs[:-1]:
                     output.sampled_token_ids = None
                 assert model_input.outputs[-1].sampled_token_ids is not None
-
         if self.do_metadata_broadcast:
             broadcast_data = worker_input.as_broadcastable_tensor_dict()
             broadcast_data.update(model_input.as_broadcastable_tensor_dict())
