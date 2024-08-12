@@ -102,8 +102,10 @@ class ModelOutput:
 class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
     # actual frozen model input dataclass passed to _base_model_runner
     frozen_model_input: Optional[ModelInputForGPUWithSamplingMetadata] = None
+
     # list of model outputs for each step, may not be all pythonized
     outputs: List[ModelOutput] = field(default_factory=list)
+
     # used to pass sampled token ids from the last step to the current step for
     # TP workers. Used to append to end of outputs and used by advance_step
     last_sampled_token_ids: Optional[torch.Tensor] = None
@@ -168,7 +170,7 @@ class MutableModelInputForGPUWithMultiStepMetadata(BroadcastableModelInput):
 # ModelInputForGPU but it wraps the actual input dataclass and adds multi-step
 # metadata
 # mypy: disable-error-code=type-var
-class MultiStepModelRunnerBase(
+class MultiStepModelRunner(
         GPUModelRunnerBase[MutableModelInputForGPUWithMultiStepMetadata]):
     # mypy: enable-error-code=type-var
 
@@ -183,38 +185,6 @@ class MultiStepModelRunnerBase(
         # used to copy tensors from GPU to CPU asynchronously
         self._copy_stream = torch.cuda.Stream()
         self.pinned_sampled_token_ids: Optional[torch.Tensor] = None
-
-    def load_model(self) -> None:
-        return self._base_model_runner.load_model()
-
-    def save_sharded_state(
-        self,
-        path: str,
-        pattern: Optional[str] = None,
-        max_size: Optional[int] = None,
-    ) -> None:
-        return self._base_model_runner.save_sharded_state(
-            path, pattern, max_size)
-
-    def save_tensorized_model(self,
-                              tensorizer_config: TensorizerConfig) -> None:
-        return self._base_model_runner.save_tensorized_model(tensorizer_config)
-
-    def profile_run(self) -> None:
-        return self._base_model_runner.profile_run()
-
-    def remove_all_loras(self):
-        return self._base_model_runner.remove_all_loras()
-
-    def capture_model(self, kv_caches: List[List]) -> None:
-        return self._base_model_runner.capture_model(kv_caches)
-
-    @property
-    def vocab_size(self) -> int:
-        return self._base_model_runner.vocab_size
-
-
-class MultiStepModelRunner(MultiStepModelRunnerBase):
 
     def make_model_input_from_broadcasted_tensor_dict(
         self, tensor_dict: Dict[str, Any]
@@ -454,6 +424,35 @@ class MultiStepModelRunner(MultiStepModelRunnerBase):
                 frozen_model_input.seq_lens[i] = attn_metadata.seq_lens[i]
 
         return model_input
+
+    def load_model(self) -> None:
+        return self._base_model_runner.load_model()
+
+    def save_sharded_state(
+        self,
+        path: str,
+        pattern: Optional[str] = None,
+        max_size: Optional[int] = None,
+    ) -> None:
+        return self._base_model_runner.save_sharded_state(
+            path, pattern, max_size)
+
+    def save_tensorized_model(self,
+                              tensorizer_config: TensorizerConfig) -> None:
+        return self._base_model_runner.save_tensorized_model(tensorizer_config)
+
+    def profile_run(self) -> None:
+        return self._base_model_runner.profile_run()
+
+    def remove_all_loras(self):
+        return self._base_model_runner.remove_all_loras()
+
+    def capture_model(self, kv_caches: List[List]) -> None:
+        return self._base_model_runner.capture_model(kv_caches)
+
+    @property
+    def vocab_size(self) -> int:
+        return self._base_model_runner.vocab_size
 
 
 def _pythonize_sampler_output(

@@ -307,14 +307,12 @@ class _AsyncLLMEngine(LLMEngine):
             finished_requests_ids = self.scheduler[
                 virtual_engine].get_and_reset_finished_requests_ids()
 
-            # check if we have a cached last_output from the previous iteration
-            # for PP this is probably the best way to pass the sampled_token_ids
-            # as a broadcast across stages will cause one virtual engine's stage
-            # to block another VE.
-            # None if not multi-step or is first iteration
+            # Check if we have a cached last_output from the previous iteration.
+            # For supporting PP this is probably the best way to pass the
+            # sampled_token_ids, as a separate broadcast over all the PP stages
+            # will cause one virtual engine's microbatch to block the pipeline.
             last_sampled_token_ids = \
-                self._get_cached_sampled_token_ids_for_multi_step(
-                virtual_engine)
+                self._get_last_sampled_token_ids(virtual_engine)
 
             execute_model_req = ExecuteModelRequest(
                 seq_group_metadata_list=seq_group_metadata_list,
@@ -325,6 +323,8 @@ class _AsyncLLMEngine(LLMEngine):
                 num_lookahead_slots=scheduler_outputs.num_lookahead_slots,
                 running_queue_size=scheduler_outputs.running_queue_size,
                 finished_requests_ids=finished_requests_ids,
+                # We use ExecuteModelRequest to pass the last sampled_token_ids
+                # to each of the non-last PP stages for in-place prepare_input.
                 last_sampled_token_ids=last_sampled_token_ids)
             # Execute the model.
             output = await self.model_executor.execute_model_async(
@@ -332,7 +332,7 @@ class _AsyncLLMEngine(LLMEngine):
             # we need to do this here so that last step's sampled_token_ids can
             # be passed to the next iteration for PP.
             if self.scheduler_config.is_multi_step:
-                self._cache_output_for_multi_step(virtual_engine, output)
+                self._update_cached_scheduler_output(virtual_engine, output)
         else:
             output = []
 
@@ -398,7 +398,7 @@ class _AsyncLLMEngine(LLMEngine):
             scheduler_outputs
         self.cached_scheduler_outputs[virtual_engine].last_output = None
 
-    def _get_cached_sampled_token_ids_for_multi_step(
+    def _get_last_sampled_token_ids(
             self, virtual_engine: int) -> Optional[torch.Tensor]:
         cached_last_output = self.cached_scheduler_outputs[
             virtual_engine].last_output
@@ -409,7 +409,7 @@ class _AsyncLLMEngine(LLMEngine):
             return torch.from_numpy(cached_last_output.sampled_token_ids_numpy)
         return None
 
-    def _cache_output_for_multi_step(
+    def _update_cached_scheduler_output(
             self, virtual_engine: int,
             output: List[Optional[SamplerOutput]]) -> None:
         if (self.parallel_config.pipeline_parallel_size > 1 and len(output) > 0
