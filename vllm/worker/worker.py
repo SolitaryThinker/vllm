@@ -121,8 +121,7 @@ class Worker(LocalOrDistributedWorkerBase):
         # VLLM_TORCH_PROFILER=1
         # VLLM_TORCH_PROFILER_TRACE_DIR=/mnt/traces/
         # view traces using https://ui.perfetto.dev/
-        torch_profiler_enabled = envs.VLLM_TORCH_PROFILER
-        if torch_profiler_enabled:
+        if envs.VLLM_TORCH_PROFILER:
             torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_TRACE_DIR
             logger.info("Profiling enabled. Traces will be saved to: %s",
                         torch_profiler_trace_dir)
