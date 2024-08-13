@@ -365,7 +365,7 @@ environment_variables: Dict[str, Callable[[], Any]] = {
      ("1", "true")),
 
     # Enables torch profiler if set. Path to the directory where torch profiler
-    # traces are saved.
+    # traces are saved. Note that it must be an absolute path.
     "VLLM_TORCH_PROFILER_DIR":
     lambda: (None if os.getenv("VLLM_TORCH_PROFILER_DIR", None) is None else os
              .path.expanduser(os.getenv("VLLM_TORCH_PROFILER_DIR", "."))),
