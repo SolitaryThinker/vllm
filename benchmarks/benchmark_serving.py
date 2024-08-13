@@ -733,7 +733,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--profile",
         action="store_true",
-        help="Use Torch Profiler",
+        help="Use Torch Profiler. The endpoint must be launched with VLLM_TORCH_PROFILER_DIR to enable profiler",
     )
     parser.add_argument(
         "--save-result",
