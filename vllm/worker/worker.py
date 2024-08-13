@@ -6,6 +6,7 @@ from typing import List, Optional, Set, Tuple, Type
 import torch
 import torch.distributed
 
+import vllm.envs as envs
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, MultiModalConfig, ObservabilityConfig,
                          ParallelConfig, PromptAdapterConfig, SchedulerConfig,
@@ -13,6 +14,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
+from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
 from vllm.model_executor.model_loader.tensorizer import TensorizerConfig
@@ -25,6 +27,8 @@ from vllm.worker.enc_dec_model_runner import EncoderDecoderModelRunner
 from vllm.worker.model_runner import GPUModelRunnerBase, ModelRunner
 from vllm.worker.multi_step_model_runner import MultiStepModelRunner
 from vllm.worker.worker_base import LocalOrDistributedWorkerBase, WorkerInput
+
+logger = init_logger(__name__)
 
 
 class Worker(LocalOrDistributedWorkerBase):
@@ -133,6 +137,33 @@ class Worker(LocalOrDistributedWorkerBase):
         self.cache_engine: List[CacheEngine]
         # Initialize gpu_cache as embedding models don't initialize kv_caches
         self.gpu_cache: Optional[List[List[torch.Tensor]]] = None
+
+        # Torch profiler. Enabled and configured through env vars:
+        # VLLM_TORCH_PROFILER_DIR=/path/to/save/trace
+        if envs.VLLM_TORCH_PROFILER_DIR:
+            torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_DIR
+            logger.info("Profiling enabled. Traces will be saved to: %s",
+                        torch_profiler_trace_dir)
+            self.profiler = torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                with_stack=True,
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                    torch_profiler_trace_dir, use_gzip=True))
+        else:
+            self.profiler = None
+
+    def start_profile(self):
+        if self.profiler is None:
+            raise RuntimeError("Profiler is not enabled.")
+        self.profiler.start()
+
+    def stop_profile(self):
+        if self.profiler is None:
+            raise RuntimeError("Profiler is not enabled.")
+        self.profiler.stop()
 
     def _is_encoder_decoder_model(self):
         return self.model_config.is_encoder_decoder_model
