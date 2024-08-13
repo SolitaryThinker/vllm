@@ -134,7 +134,7 @@ class AsyncEngineRPCServer:
                 [identity, cloudpickle.dumps(VLLM_RPC_HEALTHY_STR)])
         except Exception as e:
             await self.socket.send_multipart([identity, cloudpickle.dumps(e)])
-    
+
     async def start_profile(self, identity):
         logger.info("Starting profiler...")
         await self.engine.start_profile()

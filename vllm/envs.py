@@ -370,12 +370,9 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     lambda: bool(os.getenv("VLLM_TORCH_PROFILER", 0)),
 
     # Path to the directory where torch profiler traces are saved
-    "VLLM_TORCH_PROFILER_TRACE_DIR": 
-    lambda: os.path.expanduser(
-        os.getenv(
-            "VLLM_TORCH_PROFILER_TRACE_DIR",
-            "."
-        )),
+    "VLLM_TORCH_PROFILER_TRACE_DIR":
+    lambda: os.path.expanduser(os.getenv("VLLM_TORCH_PROFILER_TRACE_DIR", ".")
+                               ),
 }
 
 # end-env-vars-definition

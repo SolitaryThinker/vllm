@@ -252,6 +252,7 @@ async def stop_profile():
     logger.info("Profiler stopped.")
     return Response(status_code=200)
 
+
 def build_app(args: Namespace) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(router)

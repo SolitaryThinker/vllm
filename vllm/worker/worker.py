@@ -14,6 +14,7 @@ from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment,
                               set_custom_all_reduce)
+from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.model_executor import set_random_seed
 from vllm.model_executor.model_loader.tensorizer import TensorizerConfig
@@ -25,6 +26,8 @@ from vllm.worker.embedding_model_runner import EmbeddingModelRunner
 from vllm.worker.enc_dec_model_runner import EncoderDecoderModelRunner
 from vllm.worker.model_runner import GPUModelRunnerBase, ModelRunner
 from vllm.worker.worker_base import LocalOrDistributedWorkerBase, WorkerInput
+
+logger = init_logger(__name__)
 
 
 class Worker(LocalOrDistributedWorkerBase):
@@ -121,6 +124,8 @@ class Worker(LocalOrDistributedWorkerBase):
         torch_profiler_enabled = envs.VLLM_TORCH_PROFILER
         if torch_profiler_enabled:
             torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_TRACE_DIR
+            logger.info("Profiling enabled. Traces will be saved to: %s",
+                        torch_profiler_trace_dir)
             self.profiler = torch.profiler.profile(
                 activities=[
                     torch.profiler.ProfilerActivity.CPU,
@@ -129,7 +134,7 @@ class Worker(LocalOrDistributedWorkerBase):
                 with_stack=True,
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(
                     torch_profiler_trace_dir, use_gzip=True))
-        else: 
+        else:
             self.profiler = None
 
     def start_profile(self):
