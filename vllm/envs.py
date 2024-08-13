@@ -55,8 +55,7 @@ if TYPE_CHECKING:
     VERBOSE: bool = False
     VLLM_ALLOW_LONG_MAX_MODEL_LEN: bool = False
     VLLM_TEST_FORCE_FP8_MARLIN: bool = False
-    VLLM_TORCH_PROFILER: bool = False
-    VLLM_TORCH_PROFILER_TRACE_DIR: Optional[str] = None
+    VLLM_TORCH_PROFILER_DIR: Optional[str] = None
 
 
 def get_default_cache_root():
@@ -365,14 +364,11 @@ environment_variables: Dict[str, Callable[[], Any]] = {
     (os.environ.get("VLLM_TEST_FORCE_FP8_MARLIN", "0").strip().lower() in
      ("1", "true")),
 
-    # If set, enables the torch profiler for vllm workers
-    "VLLM_TORCH_PROFILER":
-    lambda: bool(os.getenv("VLLM_TORCH_PROFILER", 0)),
-
-    # Path to the directory where torch profiler traces are saved
-    "VLLM_TORCH_PROFILER_TRACE_DIR":
-    lambda: os.path.expanduser(os.getenv("VLLM_TORCH_PROFILER_TRACE_DIR", ".")
-                               ),
+    # Enables torch profiler if set. Path to the directory where torch profiler
+    # traces are saved.
+    "VLLM_TORCH_PROFILER_DIR":
+    lambda: (None if os.getenv("VLLM_TORCH_PROFILER_DIR", None) is None else os
+             .path.expanduser(os.getenv("VLLM_TORCH_PROFILER_DIR", "."))),
 }
 
 # end-env-vars-definition

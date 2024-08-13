@@ -118,11 +118,10 @@ class Worker(LocalOrDistributedWorkerBase):
         self.gpu_cache: Optional[List[List[torch.Tensor]]] = None
 
         # Torch profiler. Enabled and configured through env vars:
-        # VLLM_TORCH_PROFILER=1
-        # VLLM_TORCH_PROFILER_TRACE_DIR=/mnt/traces/
+        # VLLM_TORCH_PROFILER_DIR=/mnt/traces/
         # view traces using https://ui.perfetto.dev/
-        if envs.VLLM_TORCH_PROFILER:
-            torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_TRACE_DIR
+        if envs.VLLM_TORCH_PROFILER_DIR:
+            torch_profiler_trace_dir = envs.VLLM_TORCH_PROFILER_DIR
             logger.info("Profiling enabled. Traces will be saved to: %s",
                         torch_profiler_trace_dir)
             self.profiler = torch.profiler.profile(
