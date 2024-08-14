@@ -997,7 +997,8 @@ class SamplerOutput:
 
     # On-device tensor containing the sampled token ids.
     sampled_token_ids: Optional[torch.Tensor] = None
-    sampled_token_ids_numpy: Optional[numpy.ndarray] = None
+    # sampled_token_ids_numpy: Optional[numpy.ndarray] = None
+    sampled_token_ids_numpy: Optional[torch.Tensor] = None
 
     # Spec decode metrics populated by workers.
     spec_decode_worker_metrics: Optional["SpecDecodeWorkerMetrics"] = None
@@ -1140,6 +1141,7 @@ class ExecuteModelRequest:
     # Finished request ids since last step.
     finished_requests_ids: List[str] = field(default_factory=list)
     # The last sampled token ids for multi step decoding.
+    # last_sampled_token_ids: Optional[numpy.ndarray] = None
     last_sampled_token_ids: Optional[torch.Tensor] = None
 
     @property

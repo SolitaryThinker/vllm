@@ -249,13 +249,6 @@ class MultiStepModelRunner(
             if frozen_model_input.sampling_metadata:
                 frozen_model_input.sampling_metadata.skip_sampler_cpu_output = (
                     True)
-            # TODO(will) Will need to benchmark and look at torch profiler for
-            # the exact location we should do this. If the CPU is very ahead, it
-            # does not matter if we call this before executable or after, as the
-            # CPU will block anyways.
-            for model_output in model_input.outputs:
-                model_output.maybe_pythonize(model_input, self._copy_stream,
-                                             self.pinned_sampled_token_ids)
 
         # some pre-execute model logic for multi-step:
         #   - if it's the first step, we need to reset the sampling tensors
@@ -307,8 +300,12 @@ class MultiStepModelRunner(
             output_ready_event = torch.cuda.Event()
             output_ready_event.record(current_stream)
             if self.parallel_config.pipeline_parallel_size > 1:
+                # output[0].sampled_token_ids_numpy = output[
+                #     0].sampled_token_ids.numpy(force=True)
+                # output[0].sampled_token_ids_numpy = output[
+                #     0].sampled_token_ids.tolist()
                 output[0].sampled_token_ids_numpy = output[
-                    0].sampled_token_ids.numpy(force=True)
+                    0].sampled_token_ids.cpu()
             model_input.outputs.append(
                 ModelOutput(output[0], output_ready_event,
                             output[0].sampled_token_ids, False))
@@ -316,6 +313,14 @@ class MultiStepModelRunner(
             output[0].sampled_token_ids = None
             output[0].sampled_token_probs = None
             output[0].logprobs = None
+
+            # TODO(will) Will need to benchmark and look at torch profiler for
+            # the exact location we should do this. If the CPU is very ahead, it
+            # does not matter if we call this before executable or after, as the
+            # CPU will block anyways.
+            for model_output in model_input.outputs:
+                model_output.maybe_pythonize(model_input, self._copy_stream,
+                                             self.pinned_sampled_token_ids)
 
         model_input.current_step += 1
 
@@ -332,6 +337,12 @@ class MultiStepModelRunner(
             for output in model_input.outputs:
                 output.pythonize(model_input, self._copy_stream,
                                  self.pinned_sampled_token_ids)
+                assert output.sampler_output.sampled_token_ids is None
+                assert output.sampler_output.sampled_token_probs is None
+                assert output.sampler_output.logprobs is None   
+                output.sampler_output.sampled_token_ids = None
+                output.sampler_output.sampled_token_probs = None
+                output.sampler_output.logprobs = None
                 outputs.append(output.sampler_output)
             return outputs
 

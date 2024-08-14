@@ -8,6 +8,8 @@ from vllm.worker.multi_step_model_runner import (
     MutableModelInputForGPUWithMultiStepMetadata)
 from vllm.worker.worker import Worker, WorkerInput
 
+import torch
+
 
 @dataclass
 class MultiStepState:
@@ -73,6 +75,8 @@ class MultiStepWorker(Worker):
                 # otherwise we need to get the cached sampled token ids from the
                 # execute_model_req
                 assert execute_model_req.last_sampled_token_ids is not None
+                # model_input.last_sampled_token_ids = (
+                #     execute_model_req.last_sampled_token_ids.cuda())
                 model_input.last_sampled_token_ids = (
                     execute_model_req.last_sampled_token_ids.cuda())
                 model_input.add_sampler_output(

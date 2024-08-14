@@ -222,6 +222,8 @@ class RayGPUExecutor(DistributedGPUExecutor):
             VLLM_INSTANCE_ID,
             "VLLM_TRACE_FUNCTION":
             str(envs.VLLM_TRACE_FUNCTION),
+            "VLLM_TORCH_PROFILER_DIR":
+            str(envs.VLLM_TORCH_PROFILER_DIR),
         }, ) for (node_id, _) in worker_node_and_gpu_ids]
         self._run_workers("update_environment_variables",
                           all_args=all_args_to_update_environment_variables)
