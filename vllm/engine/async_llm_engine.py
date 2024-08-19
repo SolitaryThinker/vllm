@@ -30,6 +30,7 @@ from vllm.sequence import ExecuteModelRequest, SamplerOutput
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.usage.usage_lib import UsageContext
 from vllm.utils import print_warning_once
+from vllm.sequence import SequenceGroupMetadata
 
 logger = init_logger(__name__)
 ENGINE_ITERATION_TIMEOUT_S = envs.VLLM_ENGINE_ITERATION_TIMEOUT_S
@@ -351,7 +352,8 @@ class _AsyncLLMEngine(LLMEngine):
         # Finish the current step for all the sequence groups.
         if self.scheduler_config.is_multi_step:
             for seq_group in seq_group_metadata_list:
-                seq_group.finish_step()
+                if seq_group.state.remaining_steps > 0:
+                    seq_group.finish_step()
 
         if not self._has_remaining_steps(seq_group_metadata_list):
             # clear the cache if we have finished all the steps
@@ -384,6 +386,45 @@ class _AsyncLLMEngine(LLMEngine):
             self.request_outputs = []
 
         return self.request_outputs
+
+    def _has_remaining_steps(
+        self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
+    ) -> bool:
+        if (not self.scheduler_config.is_multi_step
+                or not seq_group_metadata_list):
+            return False
+
+        if self.scheduler_config.chunked_prefill_enabled:
+            # When chunked prefill is enabled, the prompt and decode sequences
+            # may be scheduled together. In this case, return the maximum of
+            # the remaining steps of all sequences. Leveraging the fact that
+            # prefills are always scheduled before decodes and that decodes
+            # can be multi-stepped, simply grab the remaining_step of the last
+            # sequence. Note that the last sequence can be a prompt sequence in
+            # the case where all the scheduled sequences are prompt sequences.
+            remaining_steps = seq_group_metadata_list[-1].state.remaining_steps 
+
+            # The decode sequences should have `remaining_steps` steps to go.
+            # The prefill sequences's remaining_step is 1 when they are
+            # scheduled initially. After the first step their remaining_step
+            # becomes 0.
+            assert all([sgml.state.remaining_steps in [0, 1, remaining_steps] \
+                            for sgml in seq_group_metadata_list])
+            return remaining_steps
+        else:
+            # TODO(will) this is a sanity check for nowto make sure that all the
+            # seqs are on the same steps. Eventually we will want to do some sort of
+            # dynamic scheduling when doing multi-step decoding.
+            ref_remaining_steps = seq_group_metadata_list[0].state.remaining_steps
+            if any([
+                    seq_group.state.remaining_steps != ref_remaining_steps
+                    for seq_group in seq_group_metadata_list[1:]
+            ]):
+                raise AssertionError(("All running sequence groups should "
+                                      "have the same remaining steps."))
+
+            return ref_remaining_steps > 0
+
 
     async def stop_remote_worker_execution_loop_async(self) -> None:
         """Stop the remote worker execution loop."""
