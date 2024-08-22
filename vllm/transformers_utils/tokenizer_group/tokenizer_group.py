@@ -56,6 +56,7 @@ class TokenizerGroup(BaseTokenizerGroup):
                request_id: Optional[str] = None,
                lora_request: Optional[LoRARequest] = None) -> List[int]:
         tokenizer = self.get_lora_tokenizer(lora_request)
+        print('encode', prompt)
         ret = tokenizer.encode(prompt)
         self._raise_if_input_too_long(ret, lora_request)
         return ret
@@ -66,6 +67,7 @@ class TokenizerGroup(BaseTokenizerGroup):
             request_id: Optional[str] = None,
             lora_request: Optional[LoRARequest] = None) -> List[int]:
         tokenizer = await self.get_lora_tokenizer_async(lora_request)
+        print('encode_async', prompt)
         ret = tokenizer.encode(prompt)
         self._raise_if_input_too_long(ret, lora_request)
         return ret

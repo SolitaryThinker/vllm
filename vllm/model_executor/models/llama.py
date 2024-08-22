@@ -248,6 +248,7 @@ class LlamaDecoderLayer(nn.Module):
         else:
             hidden_states, residual = self.input_layernorm(
                 hidden_states, residual)
+        print('after layernorm', hidden_states.shape)
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -314,6 +315,10 @@ class LlamaModel(nn.Module):
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
         if get_pp_group().is_first_rank:
+            print("input_ids", input_ids.shape)
+            print('input_ids', input_ids)
+            print("positions", positions.shape)
+            print('positions', positions)
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
             else:
@@ -323,6 +328,8 @@ class LlamaModel(nn.Module):
             assert intermediate_tensors is not None
             hidden_states = intermediate_tensors["hidden_states"]
             residual = intermediate_tensors["residual"]
+        
+        print("hidden_states", hidden_states.shape)
 
         for i in range(self.start_layer, self.end_layer):
             layer = self.layers[i]
