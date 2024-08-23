@@ -260,6 +260,12 @@ class _AsyncLLMEngine(LLMEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        print (f"Chunked prefill FORCE SINGLE STEP POLICY : {envs.VLLM_MULTI_STEP_CHUNKED_PREFILL_SINGLE_STEP_POLICY}")
+        pipeline_parallel_size = \
+            self.parallel_config.pipeline_parallel_size
+        self.cached_scheduler_outputs = [
+            SchedulerOutputState() for _ in range(pipeline_parallel_size)
+        ]
 
     async def step_async(
         self, virtual_engine: int
