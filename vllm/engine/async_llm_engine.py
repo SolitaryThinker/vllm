@@ -260,7 +260,6 @@ class _AsyncLLMEngine(LLMEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        print (f"Chunked prefill FORCE SINGLE STEP POLICY : {envs.VLLM_MULTI_STEP_CHUNKED_PREFILL_SINGLE_STEP_POLICY}")
         pipeline_parallel_size = \
             self.parallel_config.pipeline_parallel_size
         self.cached_scheduler_outputs = [
@@ -270,7 +269,6 @@ class _AsyncLLMEngine(LLMEngine):
     async def step_async(
         self, virtual_engine: int
     ) -> List[Union[RequestOutput, EmbeddingRequestOutput]]:
-
         """Performs one decoding iteration and returns newly generated results.
         The workers are ran asynchronously if possible.
 
@@ -395,7 +393,9 @@ class _AsyncLLMEngine(LLMEngine):
 
         return self.request_outputs
 
-    def _remaining_steps(self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]) -> Optional[int]:
+    def _remaining_steps(
+        self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
+    ) -> Optional[int]:
         if (not self.scheduler_config.is_multi_step
                 or not seq_group_metadata_list):
             return None
@@ -409,7 +409,7 @@ class _AsyncLLMEngine(LLMEngine):
         # 4. The num_steps of the decode_sequences >= num_steps of the
         #    prefill sequences.
 
-        remaining_steps = seq_group_metadata_list[-1].state.remaining_steps 
+        remaining_steps = seq_group_metadata_list[-1].state.remaining_steps
 
         if self.scheduler_config.chunked_prefill_enabled:
             # When chunked prefill is enabled, the prompt and decode sequences
@@ -421,7 +421,9 @@ class _AsyncLLMEngine(LLMEngine):
             # becomes 0.
             if any([sgml.state.remaining_steps not in [0, 1, remaining_steps] \
                             for sgml in seq_group_metadata_list]):
-                raise AssertionError("Running sequence violate assumptions about remaining_step counts.")
+                raise AssertionError(
+                    "Running sequences violate assumptions about "
+                    "remaining_step counts.")
         else:
             # In the normal case, the sequences in seq_group_metadata_list are
             # either all prefills or all decodes and there for all sequences
@@ -438,7 +440,8 @@ class _AsyncLLMEngine(LLMEngine):
     def _has_remaining_steps(
         self, seq_group_metadata_list: Optional[List[SequenceGroupMetadata]]
     ) -> bool:
-        remaining_steps: Optional[int] = self._remaining_steps(seq_group_metadata_list)
+        remaining_steps: Optional[int] = self._remaining_steps(
+            seq_group_metadata_list)
         if remaining_steps is None:
             return False
 
