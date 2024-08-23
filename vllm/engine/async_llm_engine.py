@@ -427,7 +427,7 @@ class _AsyncLLMEngine(LLMEngine):
                 raise AssertionError(("All running sequence groups should "
                                       "have the same remaining steps."))
 
-            return remaining_steps > 0
+        return remaining_steps > 0
 
 
     async def stop_remote_worker_execution_loop_async(self) -> None:
