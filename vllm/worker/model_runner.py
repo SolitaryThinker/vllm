@@ -1400,7 +1400,9 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
             sampling_metadata = SamplingMetadata.prepare(
                 seq_group_metadata_list, model_input.seq_lens,
                 model_input.query_lens, self.device, self.pin_memory,
-                generators, self.sampling_metadata_cache)
+                generators,
+                # TODO(varun) : Fix sampling metadata cache impl.
+                None)
         else:
             sampling_metadata = None
         is_prompt = (seq_group_metadata_list[0].is_prompt
