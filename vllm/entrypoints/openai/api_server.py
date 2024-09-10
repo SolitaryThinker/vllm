@@ -500,9 +500,8 @@ async def run_server(args, **uvicorn_kwargs) -> None:
         if async_engine_client is None:
             return
 
-        app = await init_app(async_engine_client, args)
 
-        shutdown_task = await serve_http(
+        shutdown_task, app, server = await serve_http(
             app,
             engine=async_engine_client,
             host=args.host,
@@ -515,6 +514,10 @@ async def run_server(args, **uvicorn_kwargs) -> None:
             ssl_cert_reqs=args.ssl_cert_reqs,
             **uvicorn_kwargs,
         )
+
+        app = await init_app(async_engine_client, args)
+
+        await add_shutdown_handlers(app, server, async_engine_client)
 
     # NB: Await server shutdown only after the backend context is exited
     await shutdown_task

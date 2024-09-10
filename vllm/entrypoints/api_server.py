@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
-from vllm.entrypoints.launcher import serve_http
+from vllm.entrypoints.launcher import serve_http, add_shutdown_handlers
 from vllm.logger import init_logger
 from vllm.sampling_params import SamplingParams
 from vllm.usage.usage_lib import UsageContext
@@ -34,7 +34,10 @@ engine = None
 @app.get("/health")
 async def health() -> Response:
     """Health check."""
-    return Response(status_code=200)
+    if engine is None:
+        return Response(status_code=503)
+    else:
+        return Response(status_code=200)
 
 
 @app.post("/generate")
@@ -116,10 +119,8 @@ async def run_server(args: Namespace,
     logger.info("vLLM API server version %s", VLLM_VERSION)
     logger.info("args: %s", args)
 
-    app = await init_app(args, llm_engine)
-    assert engine is not None
 
-    shutdown_task = await serve_http(
+    shutdown_task, app, server = await serve_http(
         app,
         engine=engine,
         host=args.host,
@@ -132,6 +133,11 @@ async def run_server(args: Namespace,
         ssl_cert_reqs=args.ssl_cert_reqs,
         **uvicorn_kwargs,
     )
+
+    app = await init_app(args, llm_engine)
+    assert engine is not None
+    assert False
+    await add_shutdown_handlers(app, server, engine)
 
     await shutdown_task
 

@@ -38,7 +38,7 @@ async def serve_http(app: FastAPI, engine: AsyncEngineClient,
 
     config = uvicorn.Config(app, **uvicorn_kwargs)
     server = uvicorn.Server(config)
-    _add_shutdown_handlers(app, server, engine)
+    # _add_shutdown_handlers(app, server, engine)
 
     loop = asyncio.get_running_loop()
 
@@ -56,7 +56,7 @@ async def serve_http(app: FastAPI, engine: AsyncEngineClient,
 
     try:
         await server_task
-        return dummy_shutdown()
+        return dummy_shutdown(), app, server
     except asyncio.CancelledError:
         port = uvicorn_kwargs["port"]
         process = find_process_using_port(port)
@@ -68,7 +68,7 @@ async def serve_http(app: FastAPI, engine: AsyncEngineClient,
         return server.shutdown()
 
 
-def _add_shutdown_handlers(app: FastAPI, server: uvicorn.Server,
+def add_shutdown_handlers(app: FastAPI, server: uvicorn.Server,
                            engine: AsyncEngineClient) -> None:
     """Adds handlers for fatal errors that should crash the server"""
 
