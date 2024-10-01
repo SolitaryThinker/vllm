@@ -26,6 +26,8 @@ class RequestFuncInput:
     use_beam_search: bool = False
     logprobs: Optional[int] = None
     multi_modal_content: Optional[dict] = None
+    json_mode: bool = False
+    schema: Optional[dict] = None
 
 
 @dataclass
@@ -241,6 +243,11 @@ async def async_request_openai_completions(
             "logprobs": request_func_input.logprobs,
             "stream": True,
         }
+
+        if request_func_input.json_mode:
+            # payload["response_format"] = {"type": "json_schema", "json_schema": {"strict": True, "schema": request_func_input.schema}}
+            payload["response_format"] = {"type": "json_object", "schema": request_func_input.schema}
+
         headers = {
             "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"
         }

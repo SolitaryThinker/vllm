@@ -42,6 +42,8 @@ from datasets import load_dataset
 from PIL.Image import Image
 from tqdm.asyncio import tqdm
 from transformers import PreTrainedTokenizerBase
+# from vllm.model_executor.guided_decoding.outlines_logits_processors import JSONLogitsProcessor
+from pydantic import BaseModel
 
 try:
     from vllm.transformers_utils.tokenizer import get_tokenizer
@@ -53,6 +55,21 @@ try:
 except ImportError:
     from argparse import ArgumentParser as FlexibleArgumentParser
 
+random_regex = """\{[ ]?"statementID"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"customerID"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"startDate"[ ]?:[ ]?"(?:\d{4})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[1-2][0-9]|3[0-1])"[ ]?,[ ]?"endDate"[ ]?:[ ]?"(?:\d{4})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[1-2][0-9]|3[0-1])"[ ]?,[ ]?"transactions"[ ]?:[ ]?\[[ ]?((\{[ ]?"transactionID"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"transactionType"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"amount"[ ]?:[ ]?((-)?(0|[1-9][0-9]*))(\.[0-9]+)?([eE][+-][0-9]+)?[ ]?,[ ]?"timestamp"[ ]?:[ ]?"(-?(?:[1-9][0-9]*)?[0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):([0-5][0-9]):([0-5][0-9])(\.[0-9]{3})?(Z)?"[ ]?\})(,[ ]?(\{[ ]?"transactionID"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"transactionType"[ ]?:[ ]?"([^"\\\x00-\x1F\x7F-\x9F]|\\["\\])*"[ ]?,[ ]?"amount"[ ]?:[ ]?((-)?(0|[1-9][0-9]*))(\.[0-9]+)?([eE][+-][0-9]+)?[ ]?,[ ]?"timestamp"[ ]?:[ ]?"(-?(?:[1-9][0-9]*)?[0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])T(2[0-3]|[01][0-9]):([0-5][0-9]):([0-5][0-9])(\.[0-9]{3})?(Z)?"[ ]?\})){0,})?[ ]?\][ ]?\}"""
+schema = {"title": "AccountStatement", "type": "object", "properties": {"statementID": {"title": "Statement ID", "type": "string"}, "customerID": {"title": "Customer ID", "type": "string"}, "startDate": {"title": "Start Date", "type": "string", "format": "date"}, "endDate": {"title": "End Date", "type": "string", "format": "date"}, "transactions": {"title": "Transactions", "type": "array", "items": {"type": "object", "properties": {"transactionID": {"title": "Transaction ID", "type": "string"}, "transactionType": {"title": "Transaction Type", "type": "string"}, "amount": {"title": "Amount", "type": "number"}, "timestamp": {"title": "Timestamp", "type": "string", "format": "date-time"}}, "required": ["transactionID", "transactionType", "amount", "timestamp"]}}}, "required": ["statementID", "customerID", "startDate", "endDate", "transactions"]}
+# logits_processor = JSONLogitsProcessor(random_regex, self.llm.llm_engine)
+#         self.sampling_params = SamplingParams(max_tokens=7000, temperature=0.7, logits_processors=[self.logits_processor])
+
+class Laptop(BaseModel):
+    brand: str
+    model: str
+    cpu: str
+    gpu: str
+    ram: int
+    storage: int
+    os: str
+    weight: float
+schema_string = json.dumps(Laptop.model_json_schema())
 
 @dataclass
 class BenchmarkMetrics:
@@ -329,6 +346,7 @@ def calculate_metrics(
             # serving backends instead of looking at len(outputs[i].itl) since
             # multiple output tokens may be bundled together
             # Note : this may inflate the output token count slightly
+            print(outputs[i].generated_text)
             output_len = len(
                 tokenizer(outputs[i].generated_text,
                           add_special_tokens=False).input_ids)
@@ -420,6 +438,8 @@ async def benchmark(
         best_of=best_of,
         use_beam_search=use_beam_search,
         multi_modal_content=test_mm_content,
+        json_mode=True,
+        schema=schema_string,
     )
     test_output = await request_func(request_func_input=test_input)
     if not test_output.success:
