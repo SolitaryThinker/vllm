@@ -324,6 +324,7 @@ class LlamaModel(nn.Module):
             else:
                 hidden_states = self.get_input_embeddings(input_ids)
             residual = None
+            print('embeddings', hidden_states.shape)
         else:
             assert intermediate_tensors is not None
             hidden_states = intermediate_tensors["hidden_states"]
